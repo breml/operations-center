@@ -1,0 +1,43 @@
+name: Daily
+on:
+  schedule:
+  - cron: "0 0 * * *"
+
+permissions:
+  contents: read
+
+jobs:
+  api-tests:
+    name: Operations Center End-to-End System Tests
+    strategy:
+      fail-fast: false
+    timeout-minutes: 30
+    runs-on:
+      - self-hosted
+      - cpu-4
+      - mem-8G
+      - disk-100G
+      - arch-amd64
+      - image-debian-13
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Go
+        uses: actions/setup-go@v5
+
+      - name: Build binaries
+        run: |
+          make build
+
+      - name: Setup Incus
+        run: |
+          apt install -y curl jq
+          curl https://pkgs.zabbly.com/get/incus-stable | sudo sh
+          sudo chmod 666 /var/lib/incus/unix.socket
+          incus admin init --auto
+          incus remote generate-certificate
+
+      # - name: Run API tests
+      #   run: |
+      #     incus-osd/tests/api-tests.py
