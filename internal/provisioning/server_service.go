@@ -24,10 +24,11 @@ import (
 )
 
 type serverService struct {
-	repo       ServerRepo
-	client     ServerClientPort
-	tokenSvc   TokenService
-	clusterSvc ClusterService
+	repo              ServerRepo
+	client            ServerClientPort
+	tokenSvc          TokenService
+	clusterSvc        ClusterService
+	serverCertificate tls.Certificate
 
 	now                    func() time.Time
 	initialConnectionDelay time.Duration
@@ -56,12 +57,13 @@ func ServerServiceWithInitialConnectionDelay(delay time.Duration) ServerServiceO
 	}
 }
 
-func NewServerService(repo ServerRepo, client ServerClientPort, tokenSvc TokenService, clusterSvc ClusterService, opts ...ServerServiceOption) *serverService {
+func NewServerService(repo ServerRepo, client ServerClientPort, tokenSvc TokenService, clusterSvc ClusterService, serverCertificate tls.Certificate, opts ...ServerServiceOption) *serverService {
 	serverSvc := &serverService{
-		repo:       repo,
-		client:     client,
-		tokenSvc:   tokenSvc,
-		clusterSvc: clusterSvc,
+		repo:              repo,
+		client:            client,
+		tokenSvc:          tokenSvc,
+		clusterSvc:        clusterSvc,
+		serverCertificate: serverCertificate,
 
 		now:                    time.Now,
 		initialConnectionDelay: 1 * time.Second,
@@ -316,6 +318,10 @@ func (s serverService) UpdateSystemNetwork(ctx context.Context, name string, sys
 }
 
 func (s serverService) SelfUpdate(ctx context.Context, serverUpdate ServerSelfUpdate) error {
+	if serverUpdate.Self {
+		return s.selfUpdateOperationsCenter(ctx, serverUpdate)
+	}
+
 	var server *Server
 
 	err := transaction.Do(ctx, func(ctx context.Context) error {
@@ -351,6 +357,67 @@ func (s serverService) SelfUpdate(ctx context.Context, serverUpdate ServerSelfUp
 	}
 
 	s.selfUpdateSignal.Emit(ctx, *server)
+
+	return nil
+}
+
+func (s serverService) selfUpdateOperationsCenter(ctx context.Context, serverUpdate ServerSelfUpdate) error {
+	err := transaction.Do(ctx, func(ctx context.Context) error {
+		servers, err := s.repo.GetAllWithFilter(ctx, ServerFilter{
+			Type: ptr.To(api.ServerTypeOperationsCenter),
+		})
+		if err != nil {
+			return fmt.Errorf(`Failed to get server of type "operations-center": %w`, err)
+		}
+
+		if len(servers) > 1 {
+			return fmt.Errorf(`Invalid internal state, more than 1 server of type "operations-center" found`)
+		}
+
+		// First time self-registration, create server entry for operations-center.
+		if len(servers) == 0 {
+			serverCert := pem.EncodeToMemory(&pem.Block{
+				Type:  "CERTIFICATE",
+				Bytes: s.serverCertificate.Leaf.Raw,
+			})
+
+			newServer := Server{
+				Name:                "local",
+				Type:                api.ServerTypeOperationsCenter,
+				ConnectionURL:       serverUpdate.ConnectionURL,
+				PublicConnectionURL: serverUpdate.ConnectionURL,
+				Certificate:         string(serverCert),
+				LastSeen:            s.now(),
+			}
+
+			err = newServer.Validate()
+			if err != nil {
+				return fmt.Errorf("Validate server: %w", err)
+			}
+
+			newServer.ID, err = s.repo.Create(ctx, newServer)
+			if err != nil {
+				return fmt.Errorf("Create server: %w", err)
+			}
+
+			return nil
+		}
+
+		server := servers[0]
+		server.ConnectionURL = serverUpdate.ConnectionURL
+		server.Status = api.ServerStatusReady
+		server.LastSeen = s.now()
+
+		err = server.Validate()
+		if err != nil {
+			return fmt.Errorf("Failed to validate server update: %w", err)
+		}
+
+		return s.repo.Update(ctx, server)
+	})
+	if err != nil {
+		return err
+	}
 
 	return nil
 }
