@@ -488,15 +488,26 @@ func (s *serverHandler) serverPut(r *http.Request) response.Response {
 //	  "500":
 //	    $ref: "#/responses/InternalServerError"
 func (s *serverHandler) serverPutSelf(r *http.Request) response.Response {
-	// Ensure presence of client certificate.
-	if r.TLS == nil || len(r.TLS.PeerCertificates) == 0 {
-		return response.Forbidden(fmt.Errorf("No client certificate provided"))
-	}
-
 	var serverUpdate api.ServerSelfUpdate
 	err := json.NewDecoder(r.Body).Decode(&serverUpdate)
 	if err != nil {
 		return response.BadRequest(err)
+	}
+
+	// Self update through unix socket from IncusOS serving Operations Center.
+	if r.RemoteAddr == "@" && r.TLS == nil {
+		err = s.service.SelfUpdate(r.Context(), provisioning.ServerSelfUpdate{
+			ConnectionURL: serverUpdate.ConnectionURL,
+			Self:          true,
+		})
+		if err != nil {
+			return response.SmartError(fmt.Errorf("Failed self-updating from server %q: %w", r.RemoteAddr, err))
+		}
+	}
+
+	// Regular self update using client certificate for authentication.
+	if r.TLS == nil || len(r.TLS.PeerCertificates) == 0 {
+		return response.Forbidden(fmt.Errorf("No client certificate provided"))
 	}
 
 	err = s.service.SelfUpdate(r.Context(), provisioning.ServerSelfUpdate{

@@ -469,6 +469,7 @@ func (d *Daemon) setupServerService(db dbdriver.DBTX, tokenSvc provisioning.Toke
 			),
 			tokenSvc,
 			clusterSvc,
+			d.serverCertificate,
 		),
 		slog.Default(),
 	)
@@ -869,6 +870,7 @@ func (d *Daemon) incusOSSelfRegister(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+
 	defer resp.Body.Close()
 
 	body, err := io.ReadAll(resp.Body)
