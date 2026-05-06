@@ -87,19 +87,28 @@ func (l localfs) Put(ctx context.Context, update provisioning.Update, filename s
 	fullFilename := filepath.Join(l.storageDir, update.UUID.String(), filename)
 	temporaryFullFilename := fullFilename + ".partial"
 
+	cancel := func() error {
+		err := content.Close()
+		if err != nil {
+			return err
+		}
+
+		return nil
+	}
+
 	err := os.MkdirAll(filepath.Dir(fullFilename), 0o700)
 	if err != nil {
-		return nil, nil, err
+		return nil, cancel, err
 	}
 
 	target, err := os.OpenFile(temporaryFullFilename, os.O_CREATE|os.O_TRUNC|os.O_RDWR, 0o600)
 	if err != nil {
-		return nil, nil, err
+		return nil, cancel, err
 	}
 
 	_, err = io.Copy(target, content)
 	if err != nil {
-		return nil, nil, err
+		return nil, cancel, err
 	}
 
 	committed := false
@@ -129,7 +138,7 @@ func (l localfs) Put(ctx context.Context, update provisioning.Update, filename s
 		return nil
 	}
 
-	cancel := func() error {
+	cancel = func() error {
 		if committed {
 			return nil
 		}

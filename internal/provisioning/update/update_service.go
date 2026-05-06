@@ -1083,16 +1083,15 @@ func (s updateService) downloadFile(ctx context.Context, update provisioning.Upd
 	}
 
 	commit, cancel, err := s.filesRepo.Put(ctx, update, updateFile.Filename, teeStream)
-	if err != nil {
-		return fmt.Errorf(`Failed to read stream for update file "%s@%s": %w`, updateFile.Filename, update.Version, err)
-	}
-
 	defer func() {
 		cancelErr := cancel()
 		if cancelErr != nil {
 			err = errors.Join(err, cancelErr)
 		}
 	}()
+	if err != nil {
+		return fmt.Errorf(`Failed to read stream for update file "%s@%s": %w`, updateFile.Filename, update.Version, err)
+	}
 
 	if updateFile.Sha256 != "" {
 		checksum := hex.EncodeToString(h.Sum(nil))
