@@ -37,6 +37,7 @@ func Test_updateService_determineToDeleteAndToDownloadUpdates(t *testing.T) {
 		updateVersionsInUse map[string]bool
 
 		wantToDeleteIDs   []string
+		wantToRefreshIDs  []string
 		wantToDownloadIDs []string
 	}{
 		{
@@ -103,6 +104,10 @@ func Test_updateService_determineToDeleteAndToDownloadUpdates(t *testing.T) {
 			wantToDeleteIDs: []string{
 				"01",
 			},
+			wantToRefreshIDs: []string{
+				"02",
+				"03",
+			},
 			wantToDownloadIDs: []string{
 				"06",
 			},
@@ -164,6 +169,9 @@ func Test_updateService_determineToDeleteAndToDownloadUpdates(t *testing.T) {
 			wantToDeleteIDs: []string{
 				"01",
 				"02",
+			},
+			wantToRefreshIDs: []string{
+				"03",
 			},
 			wantToDownloadIDs: []string{
 				"05",
@@ -230,6 +238,10 @@ func Test_updateService_determineToDeleteAndToDownloadUpdates(t *testing.T) {
 			wantToDeleteIDs: []string{
 				"02",
 			},
+			wantToRefreshIDs: []string{
+				"01",
+				"03",
+			},
 			wantToDownloadIDs: []string{
 				"05",
 				"06",
@@ -285,7 +297,12 @@ func Test_updateService_determineToDeleteAndToDownloadUpdates(t *testing.T) {
 			},
 			updateVersionsInUse: map[string]bool{},
 
-			wantToDeleteIDs:   []string{},
+			wantToDeleteIDs: []string{},
+			wantToRefreshIDs: []string{
+				"01",
+				"02",
+				"03",
+			},
 			wantToDownloadIDs: []string{},
 		},
 		{
@@ -312,6 +329,9 @@ func Test_updateService_determineToDeleteAndToDownloadUpdates(t *testing.T) {
 			wantToDeleteIDs: []string{
 				"02",
 			},
+			wantToRefreshIDs: []string{
+				"01",
+			},
 			wantToDownloadIDs: []string{},
 		},
 		{
@@ -335,7 +355,10 @@ func Test_updateService_determineToDeleteAndToDownloadUpdates(t *testing.T) {
 			originUpdates:       provisioning.Updates{},
 			updateVersionsInUse: map[string]bool{},
 
-			wantToDeleteIDs:   []string{},
+			wantToDeleteIDs: []string{},
+			wantToRefreshIDs: []string{
+				"01",
+			},
 			wantToDownloadIDs: []string{},
 		},
 		{
@@ -418,6 +441,11 @@ func Test_updateService_determineToDeleteAndToDownloadUpdates(t *testing.T) {
 				"01", // supernumerary update, only used by channel "prod".
 				"03", // supernumerary update, only used by channel "stable".
 			},
+			wantToRefreshIDs: []string{
+				"02",
+				"04",
+				"05",
+			},
 			wantToDownloadIDs: []string{
 				"06", // 2nd fresh update for channel "stable".
 				"07", // 1st fresh update for channel "stable".
@@ -499,6 +527,10 @@ func Test_updateService_determineToDeleteAndToDownloadUpdates(t *testing.T) {
 				"02", // supernumerary update
 				"04", // supernumerary update, does only provide component Incus
 			},
+			wantToRefreshIDs: []string{
+				"03",
+				"05",
+			},
 			wantToDownloadIDs: []string{
 				"06", // 2nd fresh update for channel "stable".
 				"07", // 1st fresh update for channel "stable".
@@ -522,17 +554,27 @@ func Test_updateService_determineToDeleteAndToDownloadUpdates(t *testing.T) {
 				wantToDeleteUpdateIDs = append(wantToDeleteUpdateIDs, uuidgen.FromPattern(t, id))
 			}
 
+			wantToRefreshUpdateIDs := make([]uuid.UUID, 0, len(tc.wantToRefreshIDs))
+			for _, id := range tc.wantToRefreshIDs {
+				wantToRefreshUpdateIDs = append(wantToRefreshUpdateIDs, uuidgen.FromPattern(t, id))
+			}
+
 			wantToDownloadUpdateIDs := make([]uuid.UUID, 0, len(tc.wantToDownloadIDs))
 			for _, id := range tc.wantToDownloadIDs {
 				wantToDownloadUpdateIDs = append(wantToDownloadUpdateIDs, uuidgen.FromPattern(t, id))
 			}
 
 			// Run test
-			toDeleteUpdates, toDownloadUpdates := updateSvc.determineToDeleteAndToDownloadUpdates(tc.dbUpdates, tc.originUpdates, tc.updateVersionsInUse)
+			toDeleteUpdates, toRefreshUpdates, toDownloadUpdates := updateSvc.determineToDeleteAndToDownloadUpdates(tc.dbUpdates, tc.originUpdates, tc.updateVersionsInUse)
 
 			toDeleteUpdateIDs := make([]uuid.UUID, 0, len(toDeleteUpdates))
 			for _, update := range toDeleteUpdates {
 				toDeleteUpdateIDs = append(toDeleteUpdateIDs, update.UUID)
+			}
+
+			toRefreshUpdateIDs := make([]uuid.UUID, 0, len(toRefreshUpdates))
+			for _, update := range toRefreshUpdates {
+				toRefreshUpdateIDs = append(toRefreshUpdateIDs, update.UUID)
 			}
 
 			toDownloadUpdateIDs := make([]uuid.UUID, 0, len(toDownloadUpdates))
@@ -542,6 +584,7 @@ func Test_updateService_determineToDeleteAndToDownloadUpdates(t *testing.T) {
 
 			// Assert
 			require.ElementsMatch(t, wantToDeleteUpdateIDs, toDeleteUpdateIDs)
+			require.ElementsMatch(t, wantToRefreshUpdateIDs, toRefreshUpdateIDs)
 			require.ElementsMatch(t, wantToDownloadUpdateIDs, toDownloadUpdateIDs)
 		})
 	}

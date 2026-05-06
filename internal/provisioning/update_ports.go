@@ -52,9 +52,11 @@ type (
 )
 
 type UpdateFilesRepo interface {
+	Exists(ctx context.Context, update Update, filename string) (bool, error)
 	Get(ctx context.Context, update Update, filename string) (_ io.ReadCloser, size int, _ error)
 	Put(ctx context.Context, update Update, filename string, content io.ReadCloser) (CommitFunc, CancelFunc, error)
 	Delete(ctx context.Context, update Update) error
+	PruneFiles(ctx context.Context, update Update) (_ error)
 	UsageInformation(ctx context.Context) (UsageInformation, error)
 	CleanupAll(ctx context.Context) error
 	CreateFromArchive(ctx context.Context, tarReader *tar.Reader) (*Update, error)

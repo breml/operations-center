@@ -1932,12 +1932,14 @@ func TestUpdateService_Refresh(t *testing.T) {
 		repoDeleteByUUID   []queue.Item[struct{}]
 		repoAssignChannels []queue.Item[struct{}]
 
+		repoUpdateFilesExist            []queue.Item[bool]
 		repoUpdateFilesUsageInformation []queue.Item[provisioning.UsageInformation]
 		repoUpdateFilesPut              []queue.Item[struct {
 			commitErr error
 			cancelErr error
 		}]
-		repoUpdateFilesDelete []queue.Item[struct{}]
+		repoUpdateFilesDelete     []queue.Item[struct{}]
+		repoUpdateFilesPruneFiles queue.Errs
 
 		sourceGetLatestUpdates        provisioning.Updates
 		sourceGetLatestErr            error
@@ -1956,7 +1958,7 @@ func TestUpdateService_Refresh(t *testing.T) {
 			name:                 "success - no updates, no state in the DB",
 			ctx:                  t.Context(),
 			filterExpression:     `true`,
-			fileFilterExpression: `true`,
+			fileFilterExpression: ``,
 
 			assertErr: require.NoError,
 		},
@@ -2162,12 +2164,121 @@ func TestUpdateService_Refresh(t *testing.T) {
 					},
 				},
 			},
-			repoUpdateFilesDelete: []queue.Item[struct{}]{
+			repoUpsert: []queue.Item[struct{}]{
+				// 04
 				{},
+			},
+			repoUpdateFilesUsageInformation: []queue.Item[provisioning.UsageInformation]{
+				// global check
+				{
+					Value: usageInfoGiB(50, 10),
+				},
+			},
+			repoUpdateFilesExist: []queue.Item[bool]{
+				// 04
+				{
+					Value: true,
+				},
+			},
+			repoUpdateFilesDelete: []queue.Item[struct{}]{
+				// 05
+				{},
+				// 03
 				{},
 			},
 			repoDeleteByUUID: []queue.Item[struct{}]{
+				// 05
 				{},
+				// 03
+				{},
+			},
+
+			assertErr: require.NoError,
+		},
+		{
+			name:                 "success - one update, which refreshes the current state from the db",
+			ctx:                  t.Context(),
+			filterExpression:     `true`,
+			fileFilterExpression: `true`,
+
+			sourceGetLatestUpdates: provisioning.Updates{
+				{
+					UUID:        updatePresentUUID,
+					Status:      api.UpdateStatusUnknown,
+					PublishedAt: dateTime1,
+					Channels:    []string{"stable"},
+					Files: provisioning.UpdateFiles{
+						{
+							Component: images.UpdateFileComponentOS,
+							Filename:  "new_file",
+							Size:      5,
+							// Generate hash: echo -n "dummy" | sha256sum
+							Sha256: "b5a2c96250612366ea272ffac6d9744aaf4b45aacd96aa7cfcb931ee3b558259",
+						},
+						{
+							Component: images.UpdateFileComponentOS,
+							Filename:  "present_file",
+						},
+					},
+				},
+			},
+			repoGetAllUpdates: provisioning.Updates{
+				{
+					UUID:        updatePresentUUID,
+					Status:      api.UpdateStatusReady,
+					PublishedAt: dateTime1,
+					Channels:    []string{"stable"},
+					Files: provisioning.UpdateFiles{
+						{
+							Component: images.UpdateFileComponentOS,
+							Filename:  "present_file",
+						},
+						{
+							Component: images.UpdateFileComponentOS,
+							Filename:  "obsolete_file",
+						},
+					},
+				},
+			},
+			repoUpsert: []queue.Item[struct{}]{
+				// 01
+				{},
+			},
+			repoUpdateFilesUsageInformation: []queue.Item[provisioning.UsageInformation]{
+				// global check
+				{
+					Value: usageInfoGiB(50, 10),
+				},
+			},
+			repoUpdateFilesExist: []queue.Item[bool]{
+				// 01, new_file
+				{
+					Value: false,
+				},
+				// 01, present_file
+				{
+					Value: true,
+				},
+			},
+			sourceGetUpdateFileByFilename: []queue.Item[struct {
+				stream io.ReadCloser
+				size   int
+			}]{
+				{
+					Value: struct {
+						stream io.ReadCloser
+						size   int
+					}{
+						stream: io.NopCloser(bytes.NewBufferString(`dummy`)),
+						size:   5,
+					},
+				},
+			},
+			repoUpdateFilesPut: []queue.Item[struct {
+				commitErr error
+				cancelErr error
+			}]{
+				// store new_file
 				{},
 			},
 
@@ -2271,7 +2382,7 @@ func TestUpdateService_Refresh(t *testing.T) {
 			assertErr: boom.ErrorIs,
 		},
 		{
-			name:                 "error - filesRepo.Delete",
+			name:                 "error - repo.DeleteByUUID",
 			ctx:                  t.Context(),
 			filterExpression:     `true`,
 			fileFilterExpression: `true`,
@@ -2300,7 +2411,275 @@ func TestUpdateService_Refresh(t *testing.T) {
 			assertErr: boom.ErrorIs,
 		},
 		{
-			name:                 "error - filesRepo.UsageInformation",
+			name:                 "error - toRefreshUpdates - filesRepo.PruneFiles",
+			ctx:                  t.Context(),
+			filterExpression:     `true`,
+			fileFilterExpression: `true`,
+			sourceGetLatestUpdates: provisioning.Updates{
+				{
+					UUID:        updatePresentUUID,
+					Status:      api.UpdateStatusUnknown,
+					PublishedAt: dateTime1,
+					Channels:    []string{"stable"},
+					Files: provisioning.UpdateFiles{
+						{
+							Component: images.UpdateFileComponentOS,
+						},
+					},
+				},
+			},
+			repoGetAllUpdates: provisioning.Updates{
+				{
+					UUID:        updatePresentUUID,
+					Status:      api.UpdateStatusReady,
+					PublishedAt: dateTime1,
+					Channels:    []string{"stable"},
+					Files: provisioning.UpdateFiles{
+						{
+							Component: images.UpdateFileComponentOS,
+						},
+					},
+				},
+			},
+			repoUpdateFilesPruneFiles: queue.Errs{
+				boom.Error,
+			},
+
+			assertErr: boom.ErrorIs,
+		},
+		{
+			name:                 "error - toRefreshUpdates - repo.Upsert",
+			ctx:                  t.Context(),
+			filterExpression:     `true`,
+			fileFilterExpression: `true`,
+			sourceGetLatestUpdates: provisioning.Updates{
+				{
+					UUID:        updatePresentUUID,
+					Status:      api.UpdateStatusUnknown,
+					PublishedAt: dateTime1,
+					Channels:    []string{"stable"},
+					Files: provisioning.UpdateFiles{
+						{
+							Component: images.UpdateFileComponentOS,
+						},
+					},
+				},
+			},
+			repoGetAllUpdates: provisioning.Updates{
+				{
+					UUID:        updatePresentUUID,
+					Status:      api.UpdateStatusReady,
+					PublishedAt: dateTime1,
+					Channels:    []string{"stable"},
+					Files: provisioning.UpdateFiles{
+						{
+							Component: images.UpdateFileComponentOS,
+						},
+					},
+				},
+			},
+			repoUpsert: []queue.Item[struct{}]{
+				{
+					Err: boom.Error,
+				},
+			},
+
+			assertErr: boom.ErrorIs,
+		},
+		{
+			name:                 "error - toRefreshUpdates - filesRepo.UsageInformation",
+			ctx:                  t.Context(),
+			filterExpression:     `true`,
+			fileFilterExpression: `true`,
+			sourceGetLatestUpdates: provisioning.Updates{
+				{
+					UUID:        updatePresentUUID,
+					Status:      api.UpdateStatusUnknown,
+					PublishedAt: dateTime1,
+					Channels:    []string{"stable"},
+					Files: provisioning.UpdateFiles{
+						{
+							Component: images.UpdateFileComponentOS,
+						},
+					},
+				},
+			},
+			repoGetAllUpdates: provisioning.Updates{
+				{
+					UUID:        updatePresentUUID,
+					Status:      api.UpdateStatusReady,
+					PublishedAt: dateTime1,
+					Channels:    []string{"stable"},
+					Files: provisioning.UpdateFiles{
+						{
+							Component: images.UpdateFileComponentOS,
+						},
+					},
+				},
+			},
+			repoUpsert: []queue.Item[struct{}]{
+				{},
+			},
+			repoUpdateFilesUsageInformation: []queue.Item[provisioning.UsageInformation]{
+				// global check
+				{
+					Err: boom.Error,
+				},
+			},
+
+			assertErr: boom.ErrorIs,
+		},
+		{
+			name: "error - toRefreshUpdates - context cancelled",
+			ctx: func() context.Context {
+				ctx, cancel := context.WithCancelCause(t.Context())
+				cancel(boom.Error)
+				return ctx
+			}(),
+			filterExpression:     `true`,
+			fileFilterExpression: `true`,
+			sourceGetLatestUpdates: provisioning.Updates{
+				{
+					UUID:        updatePresentUUID,
+					Status:      api.UpdateStatusUnknown,
+					PublishedAt: dateTime1,
+					Channels:    []string{"stable"},
+					Files: provisioning.UpdateFiles{
+						{
+							Component: images.UpdateFileComponentOS,
+						},
+					},
+				},
+			},
+			repoGetAllUpdates: provisioning.Updates{
+				{
+					UUID:        updatePresentUUID,
+					Status:      api.UpdateStatusReady,
+					PublishedAt: dateTime1,
+					Channels:    []string{"stable"},
+					Files: provisioning.UpdateFiles{
+						{
+							Component: images.UpdateFileComponentOS,
+						},
+					},
+				},
+			},
+			repoUpsert: []queue.Item[struct{}]{
+				{},
+			},
+			repoUpdateFilesUsageInformation: []queue.Item[provisioning.UsageInformation]{
+				// global check
+				{
+					Value: usageInfoGiB(50, 10),
+				},
+			},
+
+			assertErr: boom.ErrorIs,
+		},
+		{
+			name:                 "error - toRefreshUpdates - filesRepo.Exist",
+			ctx:                  t.Context(),
+			filterExpression:     `true`,
+			fileFilterExpression: `true`,
+			sourceGetLatestUpdates: provisioning.Updates{
+				{
+					UUID:        updatePresentUUID,
+					Status:      api.UpdateStatusUnknown,
+					PublishedAt: dateTime1,
+					Channels:    []string{"stable"},
+					Files: provisioning.UpdateFiles{
+						{
+							Component: images.UpdateFileComponentOS,
+						},
+					},
+				},
+			},
+			repoGetAllUpdates: provisioning.Updates{
+				{
+					UUID:        updatePresentUUID,
+					Status:      api.UpdateStatusReady,
+					PublishedAt: dateTime1,
+					Channels:    []string{"stable"},
+					Files: provisioning.UpdateFiles{
+						{
+							Component: images.UpdateFileComponentOS,
+						},
+					},
+				},
+			},
+			repoUpsert: []queue.Item[struct{}]{
+				{},
+			},
+			repoUpdateFilesUsageInformation: []queue.Item[provisioning.UsageInformation]{
+				// global check
+				{
+					Value: usageInfoGiB(50, 10),
+				},
+			},
+			repoUpdateFilesExist: []queue.Item[bool]{
+				{
+					Err: boom.Error,
+				},
+			},
+
+			assertErr: boom.ErrorIs,
+		},
+		{
+			name:                 "error - toRefreshUpdates - downloadFile",
+			ctx:                  t.Context(),
+			filterExpression:     `true`,
+			fileFilterExpression: `true`,
+			sourceGetLatestUpdates: provisioning.Updates{
+				{
+					UUID:        updatePresentUUID,
+					Status:      api.UpdateStatusUnknown,
+					PublishedAt: dateTime1,
+					Channels:    []string{"stable"},
+					Files: provisioning.UpdateFiles{
+						{
+							Component: images.UpdateFileComponentOS,
+						},
+					},
+				},
+			},
+			repoGetAllUpdates: provisioning.Updates{
+				{
+					UUID:        updatePresentUUID,
+					Status:      api.UpdateStatusReady,
+					PublishedAt: dateTime1,
+					Channels:    []string{"stable"},
+					Files: provisioning.UpdateFiles{
+						{
+							Component: images.UpdateFileComponentOS,
+						},
+					},
+				},
+			},
+			repoUpsert: []queue.Item[struct{}]{
+				{},
+			},
+			repoUpdateFilesUsageInformation: []queue.Item[provisioning.UsageInformation]{
+				// global check
+				{
+					Value: usageInfoGiB(50, 10),
+				},
+			},
+			repoUpdateFilesExist: []queue.Item[bool]{
+				{},
+			},
+			sourceGetUpdateFileByFilename: []queue.Item[struct {
+				stream io.ReadCloser
+				size   int
+			}]{
+				{
+					Err: boom.Error,
+				},
+			},
+
+			assertErr: boom.ErrorIs,
+		},
+		{
+			name:                 "error - toDownloadUpdates - filesRepo.UsageInformation",
 			ctx:                  t.Context(),
 			filterExpression:     `true`,
 			fileFilterExpression: `true`,
@@ -2329,7 +2708,7 @@ func TestUpdateService_Refresh(t *testing.T) {
 			assertErr: boom.ErrorIs,
 		},
 		{
-			name:                 "error - filesRepo.UsageInformation - invalid total size",
+			name:                 "error - toDownloadUpdates - filesRepo.UsageInformation - invalid total size",
 			ctx:                  t.Context(),
 			filterExpression:     `true`,
 			fileFilterExpression: `true`,
@@ -2360,7 +2739,7 @@ func TestUpdateService_Refresh(t *testing.T) {
 			},
 		},
 		{
-			name:                 "error - not enough space available global",
+			name:                 "error - toDownloadUpdates - not enough space available global",
 			ctx:                  t.Context(),
 			filterExpression:     `true`,
 			fileFilterExpression: `true`,
@@ -2391,7 +2770,7 @@ func TestUpdateService_Refresh(t *testing.T) {
 			},
 		},
 		{
-			name:                 "error - Validate",
+			name:                 "error - toDownloadUpdates - Validate",
 			ctx:                  t.Context(),
 			filterExpression:     `true`,
 			fileFilterExpression: `true`,
@@ -2423,7 +2802,7 @@ func TestUpdateService_Refresh(t *testing.T) {
 			},
 		},
 		{
-			name:                 "error - repo.Upsert pending",
+			name:                 "error - toDownloadUpdates - repo.Upsert pending",
 			ctx:                  t.Context(),
 			filterExpression:     `true`,
 			fileFilterExpression: `true`,
@@ -2458,7 +2837,7 @@ func TestUpdateService_Refresh(t *testing.T) {
 			assertErr: boom.ErrorIs,
 		},
 		{
-			name:                 "error - not enough space available before download",
+			name:                 "error - toDownloadUpdates - not enough space available before download",
 			ctx:                  t.Context(),
 			filterExpression:     `true`,
 			fileFilterExpression: `true`,
@@ -2497,7 +2876,7 @@ func TestUpdateService_Refresh(t *testing.T) {
 			},
 		},
 		{
-			name: "error - context cancelled",
+			name: "error - toDownloadUpdates - context cancelled",
 			ctx: func() context.Context {
 				ctx, cancel := context.WithCancelCause(t.Context())
 				cancel(boom.Error)
@@ -2538,7 +2917,7 @@ func TestUpdateService_Refresh(t *testing.T) {
 			assertErr: boom.ErrorIs,
 		},
 		{
-			name:                 "error - source.GetUpdateFileByFilename",
+			name:                 "error - toDownloadUpdates - source.GetUpdateFileByFilename",
 			ctx:                  t.Context(),
 			filterExpression:     `true`,
 			fileFilterExpression: `true`,
@@ -2583,7 +2962,7 @@ func TestUpdateService_Refresh(t *testing.T) {
 			assertErr: boom.ErrorIs,
 		},
 		{
-			name:                 "error - filesRepo.Put",
+			name:                 "error - toDownloadUpdates - filesRepo.Put",
 			ctx:                  t.Context(),
 			filterExpression:     `true`,
 			fileFilterExpression: `true`,
@@ -2645,7 +3024,7 @@ func TestUpdateService_Refresh(t *testing.T) {
 			assertErr: boom.ErrorIs,
 		},
 		{
-			name:                 "error - filesRepo.Put - invalid sha256",
+			name:                 "error - toDownloadUpdates - filesRepo.Put - invalid sha256",
 			ctx:                  t.Context(),
 			filterExpression:     `true`,
 			fileFilterExpression: `true`,
@@ -2706,7 +3085,7 @@ func TestUpdateService_Refresh(t *testing.T) {
 			},
 		},
 		{
-			name:                 "error - filesRepo.Put - commit",
+			name:                 "error - toDownloadUpdates - filesRepo.Put - commit",
 			ctx:                  t.Context(),
 			filterExpression:     `true`,
 			fileFilterExpression: `true`,
@@ -2770,7 +3149,7 @@ func TestUpdateService_Refresh(t *testing.T) {
 			assertErr: boom.ErrorIs,
 		},
 		{
-			name:                 "error - filesRepo.Put - cancel",
+			name:                 "error - toDownloadUpdates - filesRepo.Put - cancel",
 			ctx:                  t.Context(),
 			filterExpression:     `true`,
 			fileFilterExpression: `true`,
@@ -2834,7 +3213,7 @@ func TestUpdateService_Refresh(t *testing.T) {
 			assertErr: boom.ErrorIs,
 		},
 		{
-			name:                 "error - repo.Upsert",
+			name:                 "error - toDownloadUpdates - repo.Upsert",
 			ctx:                  t.Context(),
 			filterExpression:     `true`,
 			fileFilterExpression: `true`,
@@ -2895,7 +3274,7 @@ func TestUpdateService_Refresh(t *testing.T) {
 			assertErr: boom.ErrorIs,
 		},
 		{
-			name:                 "error - repo.Upsert",
+			name:                 "error - toDownloadUpdates - repo.AssignChannels",
 			ctx:                  t.Context(),
 			filterExpression:     `true`,
 			fileFilterExpression: `true`,
@@ -2988,6 +3367,9 @@ func TestUpdateService_Refresh(t *testing.T) {
 			}
 
 			repoUpdateFiles := &repoMock.UpdateFilesRepoMock{
+				ExistsFunc: func(ctx context.Context, update provisioning.Update, filename string) (bool, error) {
+					return queue.Pop(t, &tc.repoUpdateFilesExist)
+				},
 				PutFunc: func(ctx context.Context, update provisioning.Update, filename string, content io.ReadCloser) (provisioning.CommitFunc, provisioning.CancelFunc, error) {
 					_, err := io.ReadAll(content)
 					require.NoError(t, err)
@@ -3003,6 +3385,9 @@ func TestUpdateService_Refresh(t *testing.T) {
 				DeleteFunc: func(ctx context.Context, update provisioning.Update) error {
 					_, err := queue.Pop(t, &tc.repoUpdateFilesDelete)
 					return err
+				},
+				PruneFilesFunc: func(ctx context.Context, update provisioning.Update) error {
+					return tc.repoUpdateFilesPruneFiles.PopOrNil(t)
 				},
 				UsageInformationFunc: func(ctx context.Context) (provisioning.UsageInformation, error) {
 					return queue.Pop(t, &tc.repoUpdateFilesUsageInformation)
@@ -3060,8 +3445,11 @@ func TestUpdateService_Refresh(t *testing.T) {
 			// Ensure queues are completely drained.
 			require.Empty(t, tc.repoUpsert)
 			require.Empty(t, tc.repoDeleteByUUID)
+			require.Empty(t, tc.repoUpdateFilesExist)
+			require.Empty(t, tc.repoUpdateFilesUsageInformation)
 			require.Empty(t, tc.repoUpdateFilesPut)
 			require.Empty(t, tc.repoUpdateFilesDelete)
+			require.Empty(t, tc.repoUpdateFilesPruneFiles)
 			require.Empty(t, tc.sourceGetUpdateFileByFilename)
 		})
 	}

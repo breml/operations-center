@@ -574,6 +574,7 @@ func (s updateService) Refresh(ctx context.Context) error {
 	}
 
 	toDownloadUpdates := make([]provisioning.Update, 0, len(originUpdates))
+	var toRefreshUpdates []provisioning.Update
 	err = transaction.Do(ctx, func(ctx context.Context) error {
 		servers, err := s.serverSvc.GetAll(ctx)
 		if err != nil {
@@ -591,7 +592,7 @@ func (s updateService) Refresh(ctx context.Context) error {
 		}
 
 		var toDeleteUpdates []provisioning.Update
-		toDeleteUpdates, toDownloadUpdates = s.determineToDeleteAndToDownloadUpdates(dbUpdates, originUpdates, updateVersionsInUse)
+		toDeleteUpdates, toRefreshUpdates, toDownloadUpdates = s.determineToDeleteAndToDownloadUpdates(dbUpdates, originUpdates, updateVersionsInUse)
 
 		// Remove updates marked for removal.
 		for _, update := range toDeleteUpdates {
@@ -606,10 +607,52 @@ func (s updateService) Refresh(ctx context.Context) error {
 			}
 		}
 
+		// Prune obsolete files from existing updates.
+		for _, update := range toRefreshUpdates {
+			err = s.filesRepo.PruneFiles(ctx, update)
+			if err != nil {
+				return fmt.Errorf("Failed to prune obsolete files for update %s: %w", update.UUID, err)
+			}
+
+			err = s.repo.Upsert(ctx, update)
+			if err != nil {
+				return fmt.Errorf("Failed to update update record %s in repository: %w", update.UUID, err)
+			}
+		}
+
 		return nil
 	})
 	if err != nil {
 		return fmt.Errorf("Unable to refresh updates from source: %w", err)
+	}
+
+	for _, update := range toRefreshUpdates {
+		// Make sure, we do have enough space left in the files repository before downloading the files.
+		err = s.isSpaceAvailable(ctx, []provisioning.Update{update})
+		if err != nil {
+			return err
+		}
+
+		for _, updateFile := range update.Files {
+			if ctx.Err() != nil {
+				return fmt.Errorf("Stop refresh, context cancelled: %w", context.Cause(ctx))
+			}
+
+			ok, err := s.filesRepo.Exists(ctx, update, updateFile.Filename)
+			if err != nil {
+				return fmt.Errorf(`Failed to confirm existence for update file %s@%s: %w`, updateFile.Filename, update.Version, err)
+			}
+
+			if ok {
+				// File already present, no need to download it again.
+				continue
+			}
+
+			err = s.downloadFile(ctx, update, updateFile)
+			if err != nil {
+				return err
+			}
+		}
 	}
 
 	if len(toDownloadUpdates) > 0 {
@@ -650,42 +693,7 @@ func (s updateService) Refresh(ctx context.Context) error {
 				return fmt.Errorf("Stop refresh, context cancelled: %w", context.Cause(ctx))
 			}
 
-			err := func() (err error) {
-				var stream io.ReadCloser
-				stream, _, err = s.source.GetUpdateFileByFilenameUnverified(ctx, update, updateFile.Filename)
-				if err != nil {
-					return fmt.Errorf(`Failed to fetch update file "%s@%s": %w`, updateFile.Filename, update.Version, err)
-				}
-
-				teeStream := stream
-				var h hash.Hash
-
-				if updateFile.Sha256 != "" {
-					h = sha256.New()
-					teeStream = provisioning.NewTeeReadCloser(stream, h)
-				}
-
-				commit, cancel, err := s.filesRepo.Put(ctx, update, updateFile.Filename, teeStream)
-				if err != nil {
-					return fmt.Errorf(`Failed to read stream for update file "%s@%s": %w`, updateFile.Filename, update.Version, err)
-				}
-
-				defer func() {
-					cancelErr := cancel()
-					if cancelErr != nil {
-						err = errors.Join(err, cancelErr)
-					}
-				}()
-
-				if updateFile.Sha256 != "" {
-					checksum := hex.EncodeToString(h.Sum(nil))
-					if updateFile.Sha256 != checksum {
-						return fmt.Errorf("Invalid update, file sha256 mismatch for file %q, manifest: %s, actual: %s", updateFile.Filename, updateFile.Sha256, checksum)
-					}
-				}
-
-				return commit()
-			}()
+			err := s.downloadFile(ctx, update, updateFile)
 			if err != nil {
 				return err
 			}
@@ -843,34 +851,36 @@ func UpdateFileExprEnvFrom(u provisioning.UpdateFile) UpdateFileExprEnv {
 }
 
 func (s updateService) filterUpdateFileByFilterExpression(updates provisioning.Updates) (provisioning.Updates, error) {
-	if config.GetUpdates().FileFilterExpression != "" {
-		// The file filter expression is already compiled as part of the validation
-		// of the config so we can assume the filter expression to compile without
-		// error.
-		// If not the case, the Run call will fail with a "program is nil" error.
-		fileFilterExpression, _ := expr.Compile(
-			config.GetUpdates().FileFilterExpression,
-			UpdateFileExprEnvFrom(provisioning.UpdateFile{}).ExprCompileOptions()...,
-		)
+	if config.GetUpdates().FileFilterExpression == "" {
+		return updates, nil
+	}
 
-		for i := range updates {
-			n := 0
-			for j := range updates[i].Files {
-				result, err := expr.Run(fileFilterExpression, UpdateFileExprEnvFrom(updates[i].Files[j]))
-				if err != nil {
-					return nil, err
-				}
+	// The file filter expression is already compiled as part of the validation
+	// of the config so we can assume the filter expression to compile without
+	// error.
+	// If not the case, the Run call will fail with a "program is nil" error.
+	fileFilterExpression, _ := expr.Compile(
+		config.GetUpdates().FileFilterExpression,
+		UpdateFileExprEnvFrom(provisioning.UpdateFile{}).ExprCompileOptions()...,
+	)
 
-				if !result.(bool) {
-					continue
-				}
-
-				updates[i].Files[n] = updates[i].Files[j]
-				n++
+	for i := range updates {
+		n := 0
+		for j := range updates[i].Files {
+			result, err := expr.Run(fileFilterExpression, UpdateFileExprEnvFrom(updates[i].Files[j]))
+			if err != nil {
+				return nil, err
 			}
 
-			updates[i].Files = updates[i].Files[:n]
+			if !result.(bool) {
+				continue
+			}
+
+			updates[i].Files[n] = updates[i].Files[j]
+			n++
 		}
+
+		updates[i].Files = updates[i].Files[:n]
 	}
 
 	return updates, nil
@@ -880,16 +890,21 @@ func (s updateService) filterUpdateFileByFilterExpression(updates provisioning.U
 // upstream as well as the list of updates, that are to be removed from the DB.
 //
 // This implements the logic described in the function description of the Refresh method.
-func (s updateService) determineToDeleteAndToDownloadUpdates(dbUpdates []provisioning.Update, originUpdates []provisioning.Update, updateVersionsInUse map[string]bool) (toDeleteUpdates []provisioning.Update, toDownloadUpdates []provisioning.Update) {
+func (s updateService) determineToDeleteAndToDownloadUpdates(dbUpdates []provisioning.Update, originUpdates []provisioning.Update, updateVersionsInUse map[string]bool) (toDeleteUpdates []provisioning.Update, toRefreshUpdates []provisioning.Update, toDownloadUpdates []provisioning.Update) {
 	// Merge dbUpdates and originUpdates to the desired end state.
 	mergedUpdates := make([]provisioning.Update, 0, len(dbUpdates)+len(originUpdates))
 	mergedUpdates = append(mergedUpdates, dbUpdates...)
 	for _, originUpdate := range originUpdates {
 		// Add updates from origin to the merged updates list, if they are not yet present.
 		var found bool
-		for _, update := range mergedUpdates {
+		for i, update := range mergedUpdates {
 			if originUpdate.UUID == update.UUID {
 				found = true
+
+				// replace Files in mergedUpdates with the Files entry from originUpdates,
+				// since the current file filter expression has been applied there.
+				mergedUpdates[i].Files = originUpdate.Files
+
 				break
 			}
 		}
@@ -926,6 +941,7 @@ func (s updateService) determineToDeleteAndToDownloadUpdates(dbUpdates []provisi
 	mostRecentInDBFound := len(dbUpdates) == 0
 
 	toDeleteUpdates = make([]provisioning.Update, 0, len(dbUpdates))
+	toRefreshUpdates = make([]provisioning.Update, 0, len(dbUpdates))
 	toDownloadUpdates = make([]provisioning.Update, 0, len(originUpdates))
 	updateCount := 0
 	for _, update := range mergedUpdates {
@@ -945,7 +961,11 @@ func (s updateService) determineToDeleteAndToDownloadUpdates(dbUpdates []provisi
 				// If this is not the case, this update is marked for removal.
 				if !updateVersionsInUse[update.Version] {
 					toDeleteUpdates = append(toDeleteUpdates, update)
+
+					continue
 				}
+
+				toRefreshUpdates = append(toRefreshUpdates, update)
 
 				continue
 			}
@@ -959,6 +979,8 @@ func (s updateService) determineToDeleteAndToDownloadUpdates(dbUpdates []provisi
 				mostRecentInDBFound = true
 				updateCount++
 			}
+
+			toRefreshUpdates = append(toRefreshUpdates, update)
 
 		case api.UpdateStatusUnknown:
 			mostRecentInDBHeadroom := 0
@@ -987,7 +1009,7 @@ func (s updateService) determineToDeleteAndToDownloadUpdates(dbUpdates []provisi
 		}
 	}
 
-	return toDeleteUpdates, toDownloadUpdates
+	return toDeleteUpdates, toRefreshUpdates, toDownloadUpdates
 }
 
 // providesMissingComponentsForChannels checks for all required components in all channels, if the given update
@@ -1044,4 +1066,40 @@ func (s updateService) isSpaceAvailable(ctx context.Context, downloadUpdates []p
 	}
 
 	return nil
+}
+
+func (s updateService) downloadFile(ctx context.Context, update provisioning.Update, updateFile provisioning.UpdateFile) (err error) {
+	stream, _, err := s.source.GetUpdateFileByFilenameUnverified(ctx, update, updateFile.Filename)
+	if err != nil {
+		return fmt.Errorf(`Failed to fetch update file "%s@%s": %w`, updateFile.Filename, update.Version, err)
+	}
+
+	teeStream := stream
+	var h hash.Hash
+
+	if updateFile.Sha256 != "" {
+		h = sha256.New()
+		teeStream = provisioning.NewTeeReadCloser(stream, h)
+	}
+
+	commit, cancel, err := s.filesRepo.Put(ctx, update, updateFile.Filename, teeStream)
+	if err != nil {
+		return fmt.Errorf(`Failed to read stream for update file "%s@%s": %w`, updateFile.Filename, update.Version, err)
+	}
+
+	defer func() {
+		cancelErr := cancel()
+		if cancelErr != nil {
+			err = errors.Join(err, cancelErr)
+		}
+	}()
+
+	if updateFile.Sha256 != "" {
+		checksum := hex.EncodeToString(h.Sum(nil))
+		if updateFile.Sha256 != checksum {
+			return fmt.Errorf("Invalid update, file sha256 mismatch for file %q, manifest: %s, actual: %s", updateFile.Filename, updateFile.Sha256, checksum)
+		}
+	}
+
+	return commit()
 }
