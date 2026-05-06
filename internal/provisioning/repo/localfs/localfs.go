@@ -169,6 +169,11 @@ func (l localfs) PruneFiles(ctx context.Context, update provisioning.Update) err
 	// Remove all files from the update, that are not required by the update.
 	basePath := filepath.Join(l.storageDir, update.UUID.String())
 
+	filesLookup := make(map[string]bool, len(update.Files))
+	for _, updateFile := range update.Files {
+		filesLookup[updateFile.Filename] = true
+	}
+
 	err := filepath.WalkDir(basePath, func(path string, d fs.DirEntry, err error) error {
 		if err != nil && !errors.Is(err, fs.ErrNotExist) {
 			return err
@@ -191,15 +196,7 @@ func (l localfs) PruneFiles(ctx context.Context, update provisioning.Update) err
 			return nil
 		}
 
-		found := false
-		for _, update := range update.Files {
-			if update.Filename == relPath {
-				found = true
-				break
-			}
-		}
-
-		if !found {
+		if !filesLookup[relPath] {
 			err = os.RemoveAll(path)
 			if err != nil {
 				return err
