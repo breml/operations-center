@@ -143,6 +143,42 @@ func (_d UpdateFilesRepoWithSlog) Delete(ctx context.Context, update provisionin
 	return _d._base.Delete(ctx, update)
 }
 
+// Exists implements provisioning.UpdateFilesRepo.
+func (_d UpdateFilesRepoWithSlog) Exists(ctx context.Context, update provisioning.Update, filename string) (b bool, err error) {
+	log := slog.With()
+	if slog.Default().Enabled(ctx, logger.LevelTrace) {
+		log = log.With(
+			slog.Any("ctx", ctx),
+			slog.Any("update", update),
+			slog.String("filename", filename),
+		)
+	}
+	log.DebugContext(ctx, "=> calling Exists")
+	defer func() {
+		log := slog.With()
+		if slog.Default().Enabled(ctx, logger.LevelTrace) {
+			log = slog.With(
+				slog.Bool("b", b),
+				slog.Any("err", err),
+			)
+		} else {
+			if err != nil {
+				log = slog.With("err", err)
+			}
+		}
+		if err != nil {
+			if _d._isInformativeErrFunc(err) {
+				log.DebugContext(ctx, "<= method Exists returned an informative error")
+			} else {
+				log.ErrorContext(ctx, "<= method Exists returned an error")
+			}
+		} else {
+			log.DebugContext(ctx, "<= method Exists finished")
+		}
+	}()
+	return _d._base.Exists(ctx, update, filename)
+}
+
 // Get implements provisioning.UpdateFilesRepo.
 func (_d UpdateFilesRepoWithSlog) Get(ctx context.Context, update provisioning.Update, filename string) (readCloser io.ReadCloser, size int, err error) {
 	log := slog.With()
@@ -178,6 +214,40 @@ func (_d UpdateFilesRepoWithSlog) Get(ctx context.Context, update provisioning.U
 		}
 	}()
 	return _d._base.Get(ctx, update, filename)
+}
+
+// PruneFiles implements provisioning.UpdateFilesRepo.
+func (_d UpdateFilesRepoWithSlog) PruneFiles(ctx context.Context, update provisioning.Update) (err error) {
+	log := slog.With()
+	if slog.Default().Enabled(ctx, logger.LevelTrace) {
+		log = log.With(
+			slog.Any("ctx", ctx),
+			slog.Any("update", update),
+		)
+	}
+	log.DebugContext(ctx, "=> calling PruneFiles")
+	defer func() {
+		log := slog.With()
+		if slog.Default().Enabled(ctx, logger.LevelTrace) {
+			log = slog.With(
+				slog.Any("err", err),
+			)
+		} else {
+			if err != nil {
+				log = slog.With("err", err)
+			}
+		}
+		if err != nil {
+			if _d._isInformativeErrFunc(err) {
+				log.DebugContext(ctx, "<= method PruneFiles returned an informative error")
+			} else {
+				log.ErrorContext(ctx, "<= method PruneFiles returned an error")
+			}
+		} else {
+			log.DebugContext(ctx, "<= method PruneFiles finished")
+		}
+	}()
+	return _d._base.PruneFiles(ctx, update)
 }
 
 // Put implements provisioning.UpdateFilesRepo.
