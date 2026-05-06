@@ -205,7 +205,7 @@ func TestUpdateService_CleanupAll(t *testing.T) {
 		filesRepoCleanupAllErr error
 		repoGetAll             provisioning.Updates
 		repoGetAllErr          error
-		repoDeleteByUUID       []queue.Item[struct{}]
+		repoDeleteByUUID       queue.Errs
 
 		assertErr require.ErrorAssertionFunc
 	}{
@@ -218,10 +218,6 @@ func TestUpdateService_CleanupAll(t *testing.T) {
 				{
 					UUID: uuid.MustParse("ce9b4489-cc2e-4726-9103-ea22d07a2110"),
 				},
-			},
-			repoDeleteByUUID: []queue.Item[struct{}]{
-				{},
-				{},
 			},
 
 			assertErr: require.NoError,
@@ -248,10 +244,8 @@ func TestUpdateService_CleanupAll(t *testing.T) {
 					UUID: uuid.MustParse("ce9b4489-cc2e-4726-9103-ea22d07a2110"),
 				},
 			},
-			repoDeleteByUUID: []queue.Item[struct{}]{
-				{
-					Err: boom.Error,
-				},
+			repoDeleteByUUID: queue.Errs{
+				boom.Error,
 			},
 
 			assertErr: boom.ErrorIs,
@@ -266,8 +260,7 @@ func TestUpdateService_CleanupAll(t *testing.T) {
 					return tc.repoGetAll, tc.repoGetAllErr
 				},
 				DeleteByUUIDFunc: func(ctx context.Context, id uuid.UUID) error {
-					_, err := queue.Pop(t, &tc.repoDeleteByUUID)
-					return err
+					return tc.repoDeleteByUUID.PopOrNil(t)
 				},
 			}
 
@@ -301,8 +294,8 @@ func TestUpdateService_Prune(t *testing.T) {
 		repoGetAllWithFilter    provisioning.Updates
 		repoGetAllWithFilterErr error
 		filesRepoGet            []queue.Item[fileDetail]
-		filesRepoDelete         []queue.Item[struct{}]
-		repoDeleteByUUID        []queue.Item[struct{}]
+		filesRepoDelete         queue.Errs
+		repoDeleteByUUID        queue.Errs
 
 		assertErr require.ErrorAssertionFunc
 	}{
@@ -345,14 +338,6 @@ func TestUpdateService_Prune(t *testing.T) {
 					Err: os.ErrNotExist,
 				},
 			},
-			filesRepoDelete: []queue.Item[struct{}]{
-				{},
-				{},
-			},
-			repoDeleteByUUID: []queue.Item[struct{}]{
-				{},
-				{},
-			},
 
 			assertErr: require.NoError,
 		},
@@ -374,15 +359,8 @@ func TestUpdateService_Prune(t *testing.T) {
 					Status: api.UpdateStatusPending,
 				},
 			},
-			filesRepoDelete: []queue.Item[struct{}]{
-				{
-					Err: boom.Error,
-				},
-				{},
-			},
-			repoDeleteByUUID: []queue.Item[struct{}]{
-				{},
-				{},
+			filesRepoDelete: queue.Errs{
+				boom.Error,
 			},
 
 			assertErr: boom.ErrorIs,
@@ -399,13 +377,8 @@ func TestUpdateService_Prune(t *testing.T) {
 					Status: api.UpdateStatusPending,
 				},
 			},
-			filesRepoDelete: []queue.Item[struct{}]{
-				{},
-			},
-			repoDeleteByUUID: []queue.Item[struct{}]{
-				{
-					Err: boom.Error,
-				},
+			repoDeleteByUUID: queue.Errs{
+				boom.Error,
 			},
 
 			assertErr: boom.ErrorIs,
@@ -420,8 +393,7 @@ func TestUpdateService_Prune(t *testing.T) {
 					return tc.repoGetAllWithFilter, tc.repoGetAllWithFilterErr
 				},
 				DeleteByUUIDFunc: func(ctx context.Context, id uuid.UUID) error {
-					_, err := queue.Pop(t, &tc.repoDeleteByUUID)
-					return err
+					return tc.repoDeleteByUUID.PopOrNil(t)
 				},
 			}
 
@@ -431,8 +403,7 @@ func TestUpdateService_Prune(t *testing.T) {
 					return fileDetails.rc, fileDetails.size, err
 				},
 				DeleteFunc: func(ctx context.Context, update provisioning.Update) error {
-					_, err := queue.Pop(t, &tc.filesRepoDelete)
-					return err
+					return tc.filesRepoDelete.PopOrNil(t)
 				},
 			}
 
@@ -1928,9 +1899,9 @@ func TestUpdateService_Refresh(t *testing.T) {
 
 		repoGetAllUpdates  provisioning.Updates
 		repoGetAllErr      error
-		repoUpsert         []queue.Item[struct{}]
-		repoDeleteByUUID   []queue.Item[struct{}]
-		repoAssignChannels []queue.Item[struct{}]
+		repoUpsert         queue.Errs
+		repoDeleteByUUID   queue.Errs
+		repoAssignChannels queue.Errs
 
 		repoUpdateFilesExist            []queue.Item[bool]
 		repoUpdateFilesUsageInformation []queue.Item[provisioning.UsageInformation]
@@ -1938,7 +1909,7 @@ func TestUpdateService_Refresh(t *testing.T) {
 			commitErr error
 			cancelErr error
 		}]
-		repoUpdateFilesDelete     []queue.Item[struct{}]
+		repoUpdateFilesDelete     queue.Errs
 		repoUpdateFilesPruneFiles queue.Errs
 
 		sourceGetLatestUpdates        provisioning.Updates
@@ -2066,15 +2037,6 @@ func TestUpdateService_Refresh(t *testing.T) {
 					Value: usageInfoGiB(50, 10),
 				},
 			},
-			repoUpsert: []queue.Item[struct{}]{
-				// pending
-				{},
-				// ready
-				{},
-			},
-			repoAssignChannels: []queue.Item[struct{}]{
-				{},
-			},
 
 			sourceGetUpdateFileByFilename: []queue.Item[struct {
 				stream io.ReadCloser
@@ -2164,10 +2126,6 @@ func TestUpdateService_Refresh(t *testing.T) {
 					},
 				},
 			},
-			repoUpsert: []queue.Item[struct{}]{
-				// 04
-				{},
-			},
 			repoUpdateFilesUsageInformation: []queue.Item[provisioning.UsageInformation]{
 				// global check
 				{
@@ -2179,18 +2137,6 @@ func TestUpdateService_Refresh(t *testing.T) {
 				{
 					Value: true,
 				},
-			},
-			repoUpdateFilesDelete: []queue.Item[struct{}]{
-				// 05
-				{},
-				// 03
-				{},
-			},
-			repoDeleteByUUID: []queue.Item[struct{}]{
-				// 05
-				{},
-				// 03
-				{},
 			},
 
 			assertErr: require.NoError,
@@ -2239,10 +2185,6 @@ func TestUpdateService_Refresh(t *testing.T) {
 						},
 					},
 				},
-			},
-			repoUpsert: []queue.Item[struct{}]{
-				// 01
-				{},
 			},
 			repoUpdateFilesUsageInformation: []queue.Item[provisioning.UsageInformation]{
 				// global check
@@ -2373,10 +2315,8 @@ func TestUpdateService_Refresh(t *testing.T) {
 					PublishedAt: dateTime3,
 				},
 			},
-			repoUpdateFilesDelete: []queue.Item[struct{}]{
-				{
-					Err: boom.Error,
-				},
+			repoUpdateFilesDelete: queue.Errs{
+				boom.Error,
 			},
 
 			assertErr: boom.ErrorIs,
@@ -2399,13 +2339,8 @@ func TestUpdateService_Refresh(t *testing.T) {
 					PublishedAt: dateTime3,
 				},
 			},
-			repoUpdateFilesDelete: []queue.Item[struct{}]{
-				{},
-			},
-			repoDeleteByUUID: []queue.Item[struct{}]{
-				{
-					Err: boom.Error,
-				},
+			repoDeleteByUUID: queue.Errs{
+				boom.Error,
 			},
 
 			assertErr: boom.ErrorIs,
@@ -2478,10 +2413,8 @@ func TestUpdateService_Refresh(t *testing.T) {
 					},
 				},
 			},
-			repoUpsert: []queue.Item[struct{}]{
-				{
-					Err: boom.Error,
-				},
+			repoUpsert: queue.Errs{
+				boom.Error,
 			},
 
 			assertErr: boom.ErrorIs,
@@ -2516,9 +2449,6 @@ func TestUpdateService_Refresh(t *testing.T) {
 						},
 					},
 				},
-			},
-			repoUpsert: []queue.Item[struct{}]{
-				{},
 			},
 			repoUpdateFilesUsageInformation: []queue.Item[provisioning.UsageInformation]{
 				// global check
@@ -2564,9 +2494,6 @@ func TestUpdateService_Refresh(t *testing.T) {
 					},
 				},
 			},
-			repoUpsert: []queue.Item[struct{}]{
-				{},
-			},
 			repoUpdateFilesUsageInformation: []queue.Item[provisioning.UsageInformation]{
 				// global check
 				{
@@ -2606,9 +2533,6 @@ func TestUpdateService_Refresh(t *testing.T) {
 						},
 					},
 				},
-			},
-			repoUpsert: []queue.Item[struct{}]{
-				{},
 			},
 			repoUpdateFilesUsageInformation: []queue.Item[provisioning.UsageInformation]{
 				// global check
@@ -2654,9 +2578,6 @@ func TestUpdateService_Refresh(t *testing.T) {
 						},
 					},
 				},
-			},
-			repoUpsert: []queue.Item[struct{}]{
-				{},
 			},
 			repoUpdateFilesUsageInformation: []queue.Item[provisioning.UsageInformation]{
 				// global check
@@ -2827,11 +2748,9 @@ func TestUpdateService_Refresh(t *testing.T) {
 					Value: usageInfoGiB(50, 10),
 				},
 			},
-			repoUpsert: []queue.Item[struct{}]{
+			repoUpsert: queue.Errs{
 				// pending
-				{
-					Err: boom.Error,
-				},
+				boom.Error,
 			},
 
 			assertErr: boom.ErrorIs,
@@ -2865,10 +2784,6 @@ func TestUpdateService_Refresh(t *testing.T) {
 				{
 					Value: usageInfoGiB(50, 0), // All space consumed
 				},
-			},
-			repoUpsert: []queue.Item[struct{}]{
-				// pending
-				{},
 			},
 
 			assertErr: func(tt require.TestingT, err error, a ...any) {
@@ -2909,10 +2824,6 @@ func TestUpdateService_Refresh(t *testing.T) {
 					Value: usageInfoGiB(50, 10),
 				},
 			},
-			repoUpsert: []queue.Item[struct{}]{
-				// pending
-				{},
-			},
 
 			assertErr: boom.ErrorIs,
 		},
@@ -2945,10 +2856,6 @@ func TestUpdateService_Refresh(t *testing.T) {
 				{
 					Value: usageInfoGiB(50, 10),
 				},
-			},
-			repoUpsert: []queue.Item[struct{}]{
-				// pending
-				{},
 			},
 			sourceGetUpdateFileByFilename: []queue.Item[struct {
 				stream io.ReadCloser
@@ -2993,10 +2900,6 @@ func TestUpdateService_Refresh(t *testing.T) {
 				{
 					Value: usageInfoGiB(50, 10),
 				},
-			},
-			repoUpsert: []queue.Item[struct{}]{
-				// pending
-				{},
 			},
 			sourceGetUpdateFileByFilename: []queue.Item[struct {
 				stream io.ReadCloser
@@ -3055,10 +2958,6 @@ func TestUpdateService_Refresh(t *testing.T) {
 					Value: usageInfoGiB(50, 10),
 				},
 			},
-			repoUpsert: []queue.Item[struct{}]{
-				// pending
-				{},
-			},
 			sourceGetUpdateFileByFilename: []queue.Item[struct {
 				stream io.ReadCloser
 				size   int
@@ -3113,10 +3012,6 @@ func TestUpdateService_Refresh(t *testing.T) {
 				{
 					Value: usageInfoGiB(50, 10),
 				},
-			},
-			repoUpsert: []queue.Item[struct{}]{
-				// pending
-				{},
 			},
 			sourceGetUpdateFileByFilename: []queue.Item[struct {
 				stream io.ReadCloser
@@ -3178,10 +3073,6 @@ func TestUpdateService_Refresh(t *testing.T) {
 					Value: usageInfoGiB(50, 10),
 				},
 			},
-			repoUpsert: []queue.Item[struct{}]{
-				// pending
-				{},
-			},
 			sourceGetUpdateFileByFilename: []queue.Item[struct {
 				stream io.ReadCloser
 				size   int
@@ -3242,13 +3133,11 @@ func TestUpdateService_Refresh(t *testing.T) {
 					Value: usageInfoGiB(50, 10),
 				},
 			},
-			repoUpsert: []queue.Item[struct{}]{
+			repoUpsert: queue.Errs{
 				// pending
-				{},
+				nil,
 				// ready
-				{
-					Err: boom.Error,
-				},
+				boom.Error,
 			},
 			sourceGetUpdateFileByFilename: []queue.Item[struct {
 				stream io.ReadCloser
@@ -3303,16 +3192,8 @@ func TestUpdateService_Refresh(t *testing.T) {
 					Value: usageInfoGiB(50, 10),
 				},
 			},
-			repoUpsert: []queue.Item[struct{}]{
-				// pending
-				{},
-				// ready
-				{},
-			},
-			repoAssignChannels: []queue.Item[struct{}]{
-				{
-					Err: boom.Error,
-				},
+			repoAssignChannels: queue.Errs{
+				boom.Error,
 			},
 			sourceGetUpdateFileByFilename: []queue.Item[struct {
 				stream io.ReadCloser
@@ -3353,16 +3234,13 @@ func TestUpdateService_Refresh(t *testing.T) {
 					return tc.repoGetAllUpdates, tc.repoGetAllErr
 				},
 				UpsertFunc: func(ctx context.Context, update provisioning.Update) error {
-					_, err := queue.Pop(t, &tc.repoUpsert)
-					return err
+					return tc.repoUpsert.PopOrNil(t)
 				},
 				DeleteByUUIDFunc: func(ctx context.Context, id uuid.UUID) error {
-					_, err := queue.Pop(t, &tc.repoDeleteByUUID)
-					return err
+					return tc.repoDeleteByUUID.PopOrNil(t)
 				},
 				AssignChannelsFunc: func(ctx context.Context, id uuid.UUID, channelNames []string) error {
-					_, err := queue.Pop(t, &tc.repoAssignChannels)
-					return err
+					return tc.repoAssignChannels.PopOrNil(t)
 				},
 			}
 
@@ -3383,8 +3261,7 @@ func TestUpdateService_Refresh(t *testing.T) {
 					return commitFunc, cancelFunc, err
 				},
 				DeleteFunc: func(ctx context.Context, update provisioning.Update) error {
-					_, err := queue.Pop(t, &tc.repoUpdateFilesDelete)
-					return err
+					return tc.repoUpdateFilesDelete.PopOrNil(t)
 				},
 				PruneFilesFunc: func(ctx context.Context, update provisioning.Update) error {
 					return tc.repoUpdateFilesPruneFiles.PopOrNil(t)
