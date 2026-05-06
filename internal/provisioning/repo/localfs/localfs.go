@@ -170,7 +170,7 @@ func (l localfs) PruneFiles(ctx context.Context, update provisioning.Update) err
 	basePath := filepath.Join(l.storageDir, update.UUID.String())
 
 	err := filepath.WalkDir(basePath, func(path string, d fs.DirEntry, err error) error {
-		if err != nil {
+		if err != nil && !errors.Is(err, fs.ErrNotExist) {
 			return err
 		}
 
