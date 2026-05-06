@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -49,6 +50,21 @@ func New(storageDir string, signatureVerificationRootCA string) (*localfs, error
 		storageDir:     storageDir,
 		verifier:       signature.NewVerifier([]byte(signatureVerificationRootCA)),
 	}, nil
+}
+
+func (l localfs) Exists(ctx context.Context, update provisioning.Update, filename string) (bool, error) {
+	fullFilename := filepath.Join(l.storageDir, update.UUID.String(), filename)
+
+	_, err := os.Stat(fullFilename)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return false, nil
+		}
+
+		return false, err
+	}
+
+	return true, nil
 }
 
 func (l localfs) Get(ctx context.Context, update provisioning.Update, filename string) (io.ReadCloser, int, error) {
@@ -138,6 +154,53 @@ func (l localfs) Delete(ctx context.Context, update provisioning.Update) error {
 	fullFilename := filepath.Join(l.storageDir, update.UUID.String())
 
 	return os.RemoveAll(fullFilename)
+}
+
+func (l localfs) PruneFiles(ctx context.Context, update provisioning.Update) error {
+	// Remove all files from the update, that are not required by the update.
+	basePath := filepath.Join(l.storageDir, update.UUID.String())
+
+	err := filepath.WalkDir(basePath, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+
+		relPath, err := filepath.Rel(basePath, path)
+		if err != nil {
+			return err
+		}
+
+		if relPath == "." {
+			// Skip the basePath directory.
+			return nil
+		}
+
+		if d.IsDir() {
+			// Ignore directories. If all files are removed, an empty directory might
+			// be kept, but this is ok and will get cleaned up when the update is
+			// obsolete.
+			return nil
+		}
+
+		found := false
+		for _, update := range update.Files {
+			if update.Filename == relPath {
+				found = true
+				break
+			}
+		}
+
+		if !found {
+			err = os.RemoveAll(path)
+			if err != nil {
+				return err
+			}
+		}
+
+		return nil
+	})
+
+	return err
 }
 
 func (l localfs) CleanupAll(ctx context.Context) error {
