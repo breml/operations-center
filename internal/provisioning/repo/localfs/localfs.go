@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -51,6 +52,21 @@ func New(storageDir string, signatureVerificationRootCA string) (*localfs, error
 	}, nil
 }
 
+func (l localfs) Exists(ctx context.Context, update provisioning.Update, filename string) (bool, error) {
+	fullFilename := filepath.Join(l.storageDir, update.UUID.String(), filename)
+
+	_, err := os.Stat(fullFilename)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return false, nil
+		}
+
+		return false, err
+	}
+
+	return true, nil
+}
+
 func (l localfs) Get(ctx context.Context, update provisioning.Update, filename string) (io.ReadCloser, int, error) {
 	fullFilename := filepath.Join(l.storageDir, update.UUID.String(), filename)
 
@@ -71,19 +87,28 @@ func (l localfs) Put(ctx context.Context, update provisioning.Update, filename s
 	fullFilename := filepath.Join(l.storageDir, update.UUID.String(), filename)
 	temporaryFullFilename := fullFilename + ".partial"
 
+	cancel := func() error {
+		err := content.Close()
+		if err != nil {
+			return err
+		}
+
+		return nil
+	}
+
 	err := os.MkdirAll(filepath.Dir(fullFilename), 0o700)
 	if err != nil {
-		return nil, nil, err
+		return nil, cancel, err
 	}
 
 	target, err := os.OpenFile(temporaryFullFilename, os.O_CREATE|os.O_TRUNC|os.O_RDWR, 0o600)
 	if err != nil {
-		return nil, nil, err
+		return nil, cancel, err
 	}
 
 	_, err = io.Copy(target, content)
 	if err != nil {
-		return nil, nil, err
+		return nil, cancel, err
 	}
 
 	committed := false
@@ -113,7 +138,7 @@ func (l localfs) Put(ctx context.Context, update provisioning.Update, filename s
 		return nil
 	}
 
-	cancel := func() error {
+	cancel = func() error {
 		if committed {
 			return nil
 		}
@@ -138,6 +163,50 @@ func (l localfs) Delete(ctx context.Context, update provisioning.Update) error {
 	fullFilename := filepath.Join(l.storageDir, update.UUID.String())
 
 	return os.RemoveAll(fullFilename)
+}
+
+func (l localfs) PruneFiles(ctx context.Context, update provisioning.Update) error {
+	// Remove all files from the update, that are not required by the update.
+	basePath := filepath.Join(l.storageDir, update.UUID.String())
+
+	filesLookup := make(map[string]bool, len(update.Files))
+	for _, updateFile := range update.Files {
+		filesLookup[updateFile.Filename] = true
+	}
+
+	err := filepath.WalkDir(basePath, func(path string, d fs.DirEntry, err error) error {
+		if err != nil && !errors.Is(err, fs.ErrNotExist) {
+			return err
+		}
+
+		relPath, err := filepath.Rel(basePath, path)
+		if err != nil {
+			return err
+		}
+
+		if relPath == "." {
+			// Skip the basePath directory.
+			return nil
+		}
+
+		if d.IsDir() {
+			// Ignore directories. If all files are removed, an empty directory might
+			// be kept, but this is ok and will get cleaned up when the update is
+			// obsolete.
+			return nil
+		}
+
+		if !filesLookup[relPath] {
+			err = os.RemoveAll(path)
+			if err != nil {
+				return err
+			}
+		}
+
+		return nil
+	})
+
+	return err
 }
 
 func (l localfs) CleanupAll(ctx context.Context) error {

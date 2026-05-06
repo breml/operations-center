@@ -32,8 +32,14 @@ var _ provisioning.UpdateFilesRepo = &UpdateFilesRepoMock{}
 //			DeleteFunc: func(ctx context.Context, update provisioning.Update) error {
 //				panic("mock out the Delete method")
 //			},
+//			ExistsFunc: func(ctx context.Context, update provisioning.Update, filename string) (bool, error) {
+//				panic("mock out the Exists method")
+//			},
 //			GetFunc: func(ctx context.Context, update provisioning.Update, filename string) (io.ReadCloser, int, error) {
 //				panic("mock out the Get method")
+//			},
+//			PruneFilesFunc: func(ctx context.Context, update provisioning.Update) error {
+//				panic("mock out the PruneFiles method")
 //			},
 //			PutFunc: func(ctx context.Context, update provisioning.Update, filename string, content io.ReadCloser) (provisioning.CommitFunc, provisioning.CancelFunc, error) {
 //				panic("mock out the Put method")
@@ -57,8 +63,14 @@ type UpdateFilesRepoMock struct {
 	// DeleteFunc mocks the Delete method.
 	DeleteFunc func(ctx context.Context, update provisioning.Update) error
 
+	// ExistsFunc mocks the Exists method.
+	ExistsFunc func(ctx context.Context, update provisioning.Update, filename string) (bool, error)
+
 	// GetFunc mocks the Get method.
 	GetFunc func(ctx context.Context, update provisioning.Update, filename string) (io.ReadCloser, int, error)
+
+	// PruneFilesFunc mocks the PruneFiles method.
+	PruneFilesFunc func(ctx context.Context, update provisioning.Update) error
 
 	// PutFunc mocks the Put method.
 	PutFunc func(ctx context.Context, update provisioning.Update, filename string, content io.ReadCloser) (provisioning.CommitFunc, provisioning.CancelFunc, error)
@@ -87,6 +99,15 @@ type UpdateFilesRepoMock struct {
 			// Update is the update argument value.
 			Update provisioning.Update
 		}
+		// Exists holds details about calls to the Exists method.
+		Exists []struct {
+			// Ctx is the ctx argument value.
+			Ctx context.Context
+			// Update is the update argument value.
+			Update provisioning.Update
+			// Filename is the filename argument value.
+			Filename string
+		}
 		// Get holds details about calls to the Get method.
 		Get []struct {
 			// Ctx is the ctx argument value.
@@ -95,6 +116,13 @@ type UpdateFilesRepoMock struct {
 			Update provisioning.Update
 			// Filename is the filename argument value.
 			Filename string
+		}
+		// PruneFiles holds details about calls to the PruneFiles method.
+		PruneFiles []struct {
+			// Ctx is the ctx argument value.
+			Ctx context.Context
+			// Update is the update argument value.
+			Update provisioning.Update
 		}
 		// Put holds details about calls to the Put method.
 		Put []struct {
@@ -116,7 +144,9 @@ type UpdateFilesRepoMock struct {
 	lockCleanupAll        sync.RWMutex
 	lockCreateFromArchive sync.RWMutex
 	lockDelete            sync.RWMutex
+	lockExists            sync.RWMutex
 	lockGet               sync.RWMutex
+	lockPruneFiles        sync.RWMutex
 	lockPut               sync.RWMutex
 	lockUsageInformation  sync.RWMutex
 }
@@ -225,6 +255,46 @@ func (mock *UpdateFilesRepoMock) DeleteCalls() []struct {
 	return calls
 }
 
+// Exists calls ExistsFunc.
+func (mock *UpdateFilesRepoMock) Exists(ctx context.Context, update provisioning.Update, filename string) (bool, error) {
+	if mock.ExistsFunc == nil {
+		panic("UpdateFilesRepoMock.ExistsFunc: method is nil but UpdateFilesRepo.Exists was just called")
+	}
+	callInfo := struct {
+		Ctx      context.Context
+		Update   provisioning.Update
+		Filename string
+	}{
+		Ctx:      ctx,
+		Update:   update,
+		Filename: filename,
+	}
+	mock.lockExists.Lock()
+	mock.calls.Exists = append(mock.calls.Exists, callInfo)
+	mock.lockExists.Unlock()
+	return mock.ExistsFunc(ctx, update, filename)
+}
+
+// ExistsCalls gets all the calls that were made to Exists.
+// Check the length with:
+//
+//	len(mockedUpdateFilesRepo.ExistsCalls())
+func (mock *UpdateFilesRepoMock) ExistsCalls() []struct {
+	Ctx      context.Context
+	Update   provisioning.Update
+	Filename string
+} {
+	var calls []struct {
+		Ctx      context.Context
+		Update   provisioning.Update
+		Filename string
+	}
+	mock.lockExists.RLock()
+	calls = mock.calls.Exists
+	mock.lockExists.RUnlock()
+	return calls
+}
+
 // Get calls GetFunc.
 func (mock *UpdateFilesRepoMock) Get(ctx context.Context, update provisioning.Update, filename string) (io.ReadCloser, int, error) {
 	if mock.GetFunc == nil {
@@ -262,6 +332,42 @@ func (mock *UpdateFilesRepoMock) GetCalls() []struct {
 	mock.lockGet.RLock()
 	calls = mock.calls.Get
 	mock.lockGet.RUnlock()
+	return calls
+}
+
+// PruneFiles calls PruneFilesFunc.
+func (mock *UpdateFilesRepoMock) PruneFiles(ctx context.Context, update provisioning.Update) error {
+	if mock.PruneFilesFunc == nil {
+		panic("UpdateFilesRepoMock.PruneFilesFunc: method is nil but UpdateFilesRepo.PruneFiles was just called")
+	}
+	callInfo := struct {
+		Ctx    context.Context
+		Update provisioning.Update
+	}{
+		Ctx:    ctx,
+		Update: update,
+	}
+	mock.lockPruneFiles.Lock()
+	mock.calls.PruneFiles = append(mock.calls.PruneFiles, callInfo)
+	mock.lockPruneFiles.Unlock()
+	return mock.PruneFilesFunc(ctx, update)
+}
+
+// PruneFilesCalls gets all the calls that were made to PruneFiles.
+// Check the length with:
+//
+//	len(mockedUpdateFilesRepo.PruneFilesCalls())
+func (mock *UpdateFilesRepoMock) PruneFilesCalls() []struct {
+	Ctx    context.Context
+	Update provisioning.Update
+} {
+	var calls []struct {
+		Ctx    context.Context
+		Update provisioning.Update
+	}
+	mock.lockPruneFiles.RLock()
+	calls = mock.calls.PruneFiles
+	mock.lockPruneFiles.RUnlock()
 	return calls
 }
 

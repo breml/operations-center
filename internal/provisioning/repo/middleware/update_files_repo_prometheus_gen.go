@@ -81,6 +81,20 @@ func (_d UpdateFilesRepoWithPrometheus) Delete(ctx context.Context, update provi
 	return _d.base.Delete(ctx, update)
 }
 
+// Exists implements provisioning.UpdateFilesRepo.
+func (_d UpdateFilesRepoWithPrometheus) Exists(ctx context.Context, update provisioning.Update, filename string) (b bool, err error) {
+	_since := time.Now()
+	defer func() {
+		result := "ok"
+		if err != nil {
+			result = "error"
+		}
+
+		updateFilesRepoDurationSummaryVec.WithLabelValues(_d.instanceName, "Exists", result).Observe(time.Since(_since).Seconds())
+	}()
+	return _d.base.Exists(ctx, update, filename)
+}
+
 // Get implements provisioning.UpdateFilesRepo.
 func (_d UpdateFilesRepoWithPrometheus) Get(ctx context.Context, update provisioning.Update, filename string) (readCloser io.ReadCloser, size int, err error) {
 	_since := time.Now()
@@ -93,6 +107,20 @@ func (_d UpdateFilesRepoWithPrometheus) Get(ctx context.Context, update provisio
 		updateFilesRepoDurationSummaryVec.WithLabelValues(_d.instanceName, "Get", result).Observe(time.Since(_since).Seconds())
 	}()
 	return _d.base.Get(ctx, update, filename)
+}
+
+// PruneFiles implements provisioning.UpdateFilesRepo.
+func (_d UpdateFilesRepoWithPrometheus) PruneFiles(ctx context.Context, update provisioning.Update) (err error) {
+	_since := time.Now()
+	defer func() {
+		result := "ok"
+		if err != nil {
+			result = "error"
+		}
+
+		updateFilesRepoDurationSummaryVec.WithLabelValues(_d.instanceName, "PruneFiles", result).Observe(time.Since(_since).Seconds())
+	}()
+	return _d.base.PruneFiles(ctx, update)
 }
 
 // Put implements provisioning.UpdateFilesRepo.

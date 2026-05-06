@@ -3,12 +3,12 @@ package localfs
 import (
 	"archive/tar"
 	"bytes"
-	"context"
 	"crypto/sha256"
 	"embed"
 	"encoding/hex"
 	"encoding/json"
 	"io"
+	"io/fs"
 	"os"
 	"path"
 	"path/filepath"
@@ -24,7 +24,84 @@ import (
 	"github.com/FuturFusion/operations-center/internal/security/signature/signaturetest"
 	"github.com/FuturFusion/operations-center/internal/util/file"
 	"github.com/FuturFusion/operations-center/internal/util/testing/boom"
+	"github.com/FuturFusion/operations-center/internal/util/testing/uuidgen"
 )
+
+func TestLocalfs_Exists(t *testing.T) {
+	tests := []struct {
+		name        string
+		setupTmpDir func(t *testing.T, destDir string)
+		update      provisioning.Update
+
+		assertErr  require.ErrorAssertionFunc
+		wantExists bool
+	}{
+		{
+			name: "file exists",
+			setupTmpDir: func(t *testing.T, destDir string) {
+				t.Helper()
+				updateID := uuidgen.FromPattern(t, "0").String()
+
+				err := os.MkdirAll(filepath.Join(destDir, updateID), 0o700)
+				require.NoError(t, err)
+
+				err = os.WriteFile(filepath.Join(destDir, updateID, "file1.txt"), []byte(`file1 body`), 0o600)
+				require.NoError(t, err)
+			},
+			update: provisioning.Update{
+				UUID: uuidgen.FromPattern(t, "0"),
+			},
+
+			assertErr:  require.NoError,
+			wantExists: true,
+		},
+		{
+			name: "file does not exist",
+			setupTmpDir: func(t *testing.T, destDir string) {
+				t.Helper()
+			},
+			update: provisioning.Update{
+				UUID: uuidgen.FromPattern(t, "0"),
+			},
+
+			assertErr:  require.NoError,
+			wantExists: false,
+		},
+		{
+			name: "no permission",
+			setupTmpDir: func(t *testing.T, destDir string) {
+				t.Helper()
+				updateID := uuidgen.FromPattern(t, "0").String()
+
+				err := os.MkdirAll(filepath.Join(destDir, updateID), 0o000)
+				require.NoError(t, err)
+			},
+			update: provisioning.Update{
+				UUID: uuidgen.FromPattern(t, "0"),
+			},
+
+			assertErr:  require.Error,
+			wantExists: false,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			// Setup
+			tmpDir := t.TempDir()
+			tc.setupTmpDir(t, tmpDir)
+			lfs, err := New(tmpDir, "")
+			require.NoError(t, err)
+
+			// Run test
+			exists, err := lfs.Exists(t.Context(), tc.update, "file1.txt")
+
+			// Assert
+			tc.assertErr(t, err)
+			require.Equal(t, tc.wantExists, exists)
+		})
+	}
+}
 
 func TestLocalfs_Get(t *testing.T) {
 	tests := []struct {
@@ -92,7 +169,7 @@ func TestLocalfs_Get(t *testing.T) {
 			require.NoError(t, err)
 
 			// Run test
-			gotReader, _, err := lfs.Get(context.Background(), tc.update, tc.filename)
+			gotReader, _, err := lfs.Get(t.Context(), tc.update, tc.filename)
 
 			// Assert
 			tc.assertErr(t, err)
@@ -177,7 +254,7 @@ func TestLocalfs_Put(t *testing.T) {
 			require.NoError(t, err)
 
 			// Run test
-			commit, cancel, err := lfs.Put(context.Background(), tc.update, "file.name", tc.stream)
+			commit, cancel, err := lfs.Put(t.Context(), tc.update, "file.name", tc.stream)
 
 			var commitErr error
 			if tc.commit {
@@ -246,12 +323,106 @@ func TestLocalfs_Delete(t *testing.T) {
 			require.NoError(t, err)
 
 			// Run test
-			err = lfs.Delete(context.Background(), tc.update)
+			err = lfs.Delete(t.Context(), tc.update)
 
 			// Assert
 			tc.assertErr(t, err)
 		})
 	}
+}
+
+func TestLocalfs_PruneFiles(t *testing.T) {
+	tests := []struct {
+		name        string
+		setupTmpDir func(t *testing.T, destDir string)
+		update      provisioning.Update
+
+		assertErr require.ErrorAssertionFunc
+		wantFiles []string
+	}{
+		{
+			name: "success",
+			setupTmpDir: func(t *testing.T, destDir string) {
+				t.Helper()
+
+				updateID := uuidgen.FromPattern(t, "0").String()
+
+				err := os.MkdirAll(filepath.Join(destDir, updateID), 0o700)
+				require.NoError(t, err)
+
+				err = os.MkdirAll(filepath.Join(destDir, updateID, "x86_64"), 0o700)
+				require.NoError(t, err)
+
+				err = os.WriteFile(filepath.Join(destDir, updateID, "x86_64", "file1.txt"), []byte(`file1 body`), 0o600)
+				require.NoError(t, err)
+				err = os.WriteFile(filepath.Join(destDir, updateID, "x86_64", "file2.txt"), []byte(`file2 body`), 0o600) // removed, update does not contain x86_64/file2.txt.
+				require.NoError(t, err)
+
+				err = os.MkdirAll(filepath.Join(destDir, updateID, "aarch64"), 0o700)
+				require.NoError(t, err)
+
+				err = os.WriteFile(filepath.Join(destDir, updateID, "aarch64", "file1.txt"), []byte(`file1 body`), 0o600) // removed, update does not contain any files for aarch64.
+				require.NoError(t, err)
+			},
+			update: provisioning.Update{
+				UUID: uuidgen.FromPattern(t, "0"),
+				Files: provisioning.UpdateFiles{
+					{
+						Filename: "x86_64/file1.txt",
+					},
+				},
+			},
+
+			assertErr: require.NoError,
+			wantFiles: []string{
+				"x86_64/file1.txt",
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			// Setup
+			tmpDir := t.TempDir()
+			tc.setupTmpDir(t, tmpDir)
+			lfs, err := New(tmpDir, "")
+			require.NoError(t, err)
+
+			// Run test
+			err = lfs.PruneFiles(t.Context(), tc.update)
+
+			// Assert
+			tc.assertErr(t, err)
+			gotFiles, err := listFiles(filepath.Join(tmpDir, tc.update.UUID.String()))
+			require.NoError(t, err)
+			require.ElementsMatch(t, tc.wantFiles, gotFiles)
+		})
+	}
+}
+
+func listFiles(root string) ([]string, error) {
+	var files []string
+
+	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+
+		if d.IsDir() {
+			return nil
+		}
+
+		relPath, err := filepath.Rel(root, path)
+		if err != nil {
+			return err
+		}
+
+		files = append(files, relPath)
+
+		return nil
+	})
+
+	return files, err
 }
 
 func TestLocalfs_CleanupAll(t *testing.T) {
@@ -289,7 +460,7 @@ func TestLocalfs_CleanupAll(t *testing.T) {
 			require.NoError(t, err)
 
 			// Run test
-			err = lfs.CleanupAll(context.Background())
+			err = lfs.CleanupAll(t.Context())
 
 			// Assert
 			require.NoError(t, err)
@@ -533,7 +704,7 @@ func TestLocalfs_CreateFromArchive(t *testing.T) {
 			require.NoError(t, err)
 
 			// Run test
-			gotUpdate, err := lfs.CreateFromArchive(context.Background(), tr)
+			gotUpdate, err := lfs.CreateFromArchive(t.Context(), tr)
 
 			// Assert
 			tc.assertErr(t, err)
