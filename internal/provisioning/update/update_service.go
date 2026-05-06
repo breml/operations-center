@@ -628,16 +628,12 @@ func (s updateService) Refresh(ctx context.Context) error {
 
 	for _, update := range toRefreshUpdates {
 		// Make sure, we do have enough space left in the files repository before downloading the files.
-		err = s.isSpaceAvailable(ctx, []provisioning.Update{update})
-		if err != nil {
-			return err
+		refreshUpdate := provisioning.Update{
+			Version: update.Version,
+			Files:   make(provisioning.UpdateFiles, 0, len(update.Files)),
 		}
 
 		for _, updateFile := range update.Files {
-			if ctx.Err() != nil {
-				return fmt.Errorf("Stop refresh, context cancelled: %w", context.Cause(ctx))
-			}
-
 			ok, err := s.filesRepo.Exists(ctx, update, updateFile.Filename)
 			if err != nil {
 				return fmt.Errorf(`Failed to confirm existence for update file %s@%s: %w`, updateFile.Filename, update.Version, err)
@@ -646,6 +642,19 @@ func (s updateService) Refresh(ctx context.Context) error {
 			if ok {
 				// File already present, no need to download it again.
 				continue
+			}
+
+			refreshUpdate.Files = append(refreshUpdate.Files, updateFile)
+		}
+
+		err = s.isSpaceAvailable(ctx, []provisioning.Update{refreshUpdate})
+		if err != nil {
+			return err
+		}
+
+		for _, updateFile := range refreshUpdate.Files {
+			if ctx.Err() != nil {
+				return fmt.Errorf("Stop refresh, context cancelled: %w", context.Cause(ctx))
 			}
 
 			err = s.downloadFile(ctx, update, updateFile)

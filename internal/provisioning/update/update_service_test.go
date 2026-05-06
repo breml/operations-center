@@ -2420,6 +2420,45 @@ func TestUpdateService_Refresh(t *testing.T) {
 			assertErr: boom.ErrorIs,
 		},
 		{
+			name:                 "error - toRefreshUpdates - filesRepo.Exist",
+			ctx:                  t.Context(),
+			filterExpression:     `true`,
+			fileFilterExpression: `true`,
+			sourceGetLatestUpdates: provisioning.Updates{
+				{
+					UUID:        updatePresentUUID,
+					Status:      api.UpdateStatusUnknown,
+					PublishedAt: dateTime1,
+					Channels:    []string{"stable"},
+					Files: provisioning.UpdateFiles{
+						{
+							Component: images.UpdateFileComponentOS,
+						},
+					},
+				},
+			},
+			repoGetAllUpdates: provisioning.Updates{
+				{
+					UUID:        updatePresentUUID,
+					Status:      api.UpdateStatusReady,
+					PublishedAt: dateTime1,
+					Channels:    []string{"stable"},
+					Files: provisioning.UpdateFiles{
+						{
+							Component: images.UpdateFileComponentOS,
+						},
+					},
+				},
+			},
+			repoUpdateFilesExist: []queue.Item[bool]{
+				{
+					Err: boom.Error,
+				},
+			},
+
+			assertErr: boom.ErrorIs,
+		},
+		{
 			name:                 "error - toRefreshUpdates - filesRepo.UsageInformation",
 			ctx:                  t.Context(),
 			filterExpression:     `true`,
@@ -2449,6 +2488,9 @@ func TestUpdateService_Refresh(t *testing.T) {
 						},
 					},
 				},
+			},
+			repoUpdateFilesExist: []queue.Item[bool]{
+				{},
 			},
 			repoUpdateFilesUsageInformation: []queue.Item[provisioning.UsageInformation]{
 				// global check
@@ -2494,55 +2536,13 @@ func TestUpdateService_Refresh(t *testing.T) {
 					},
 				},
 			},
-			repoUpdateFilesUsageInformation: []queue.Item[provisioning.UsageInformation]{
-				// global check
-				{
-					Value: usageInfoGiB(50, 10),
-				},
-			},
-
-			assertErr: boom.ErrorIs,
-		},
-		{
-			name:                 "error - toRefreshUpdates - filesRepo.Exist",
-			ctx:                  t.Context(),
-			filterExpression:     `true`,
-			fileFilterExpression: `true`,
-			sourceGetLatestUpdates: provisioning.Updates{
-				{
-					UUID:        updatePresentUUID,
-					Status:      api.UpdateStatusUnknown,
-					PublishedAt: dateTime1,
-					Channels:    []string{"stable"},
-					Files: provisioning.UpdateFiles{
-						{
-							Component: images.UpdateFileComponentOS,
-						},
-					},
-				},
-			},
-			repoGetAllUpdates: provisioning.Updates{
-				{
-					UUID:        updatePresentUUID,
-					Status:      api.UpdateStatusReady,
-					PublishedAt: dateTime1,
-					Channels:    []string{"stable"},
-					Files: provisioning.UpdateFiles{
-						{
-							Component: images.UpdateFileComponentOS,
-						},
-					},
-				},
-			},
-			repoUpdateFilesUsageInformation: []queue.Item[provisioning.UsageInformation]{
-				// global check
-				{
-					Value: usageInfoGiB(50, 10),
-				},
-			},
 			repoUpdateFilesExist: []queue.Item[bool]{
+				{},
+			},
+			repoUpdateFilesUsageInformation: []queue.Item[provisioning.UsageInformation]{
+				// global check
 				{
-					Err: boom.Error,
+					Value: usageInfoGiB(50, 10),
 				},
 			},
 
