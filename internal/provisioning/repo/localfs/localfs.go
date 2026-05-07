@@ -86,14 +86,29 @@ func (l localfs) Get(ctx context.Context, update provisioning.Update, filename s
 func (l localfs) Put(ctx context.Context, update provisioning.Update, filename string, content io.ReadCloser) (provisioning.CommitFunc, provisioning.CancelFunc, error) {
 	fullFilename := filepath.Join(l.storageDir, update.UUID.String(), filename)
 	temporaryFullFilename := fullFilename + ".partial"
+	var target *os.File
+	committed := false
 
 	cancel := func() error {
-		err := content.Close()
-		if err != nil {
-			return err
+		if committed {
+			return nil
 		}
 
-		return nil
+		var contentCloseErr error
+		var targetCloseErr error
+		var temporaryFileRemoveErr error
+
+		contentCloseErr = content.Close()
+
+		if target != nil {
+			targetCloseErr = target.Close()
+		}
+
+		if file.PathExists(temporaryFullFilename) {
+			temporaryFileRemoveErr = os.Remove(temporaryFullFilename)
+		}
+
+		return errors.Join(contentCloseErr, targetCloseErr, temporaryFileRemoveErr)
 	}
 
 	err := os.MkdirAll(filepath.Dir(fullFilename), 0o700)
@@ -101,7 +116,7 @@ func (l localfs) Put(ctx context.Context, update provisioning.Update, filename s
 		return nil, cancel, err
 	}
 
-	target, err := os.OpenFile(temporaryFullFilename, os.O_CREATE|os.O_TRUNC|os.O_RDWR, 0o600)
+	target, err = os.OpenFile(temporaryFullFilename, os.O_CREATE|os.O_TRUNC|os.O_RDWR, 0o600)
 	if err != nil {
 		return nil, cancel, err
 	}
@@ -110,8 +125,6 @@ func (l localfs) Put(ctx context.Context, update provisioning.Update, filename s
 	if err != nil {
 		return nil, cancel, err
 	}
-
-	committed := false
 
 	commit := func() (err error) {
 		defer func() {
@@ -123,35 +136,24 @@ func (l localfs) Put(ctx context.Context, update provisioning.Update, filename s
 			}
 		}()
 
-		err = content.Close()
-		if err != nil {
-			return err
+		var contentCloseErr error
+		var targetCloseErr error
+		var temporaryFileRenameErr error
+
+		contentCloseErr = content.Close()
+
+		if target != nil {
+			targetCloseErr = target.Close()
 		}
 
-		err = os.Rename(temporaryFullFilename, fullFilename)
+		temporaryFileRenameErr = os.Rename(temporaryFullFilename, fullFilename)
+
+		err = errors.Join(contentCloseErr, targetCloseErr, temporaryFileRenameErr)
 		if err != nil {
 			return err
 		}
 
 		committed = true
-
-		return nil
-	}
-
-	cancel = func() error {
-		if committed {
-			return nil
-		}
-
-		err := content.Close()
-		if err != nil {
-			return err
-		}
-
-		err = os.Remove(temporaryFullFilename)
-		if err != nil {
-			return err
-		}
 
 		return nil
 	}
