@@ -97,7 +97,7 @@ const ClusterForm: FC<Props> = ({ cluster, onRename, onSubmit }) => {
             onChange={(val) => formik.setFieldValue("restore_mode", val)}
           />
           <Form.Group className="mb-3" controlId="post_restore_delay">
-            <Form.Label>Post restore delay (minutes)</Form.Label>
+            <Form.Label>Post restore delay</Form.Label>
             <Form.Control
               type="text"
               name="post_restore_delay"
