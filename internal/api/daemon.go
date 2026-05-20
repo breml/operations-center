@@ -944,6 +944,8 @@ func (d *Daemon) setupAPIRoutes(
 		return true
 	}
 
+	simplestreamsRouter := router.SubGroup("/incus-images")
+
 	api10router := router.SubGroup("/1.0").AddMiddlewares(
 		d.authenticator.Middleware(authn.WithIsAuthenticationRequired(isAuthenticationRequired)),
 	)
@@ -951,7 +953,7 @@ func (d *Daemon) setupAPIRoutes(
 
 	imageRouter := api10router.SubGroup("/image")
 	imageIncusRouter := imageRouter.SubGroup("/incus")
-	registerImageIncusHandler(imageIncusRouter, d.authorizer, incusImageSvc)
+	registerImageIncusHandler(imageIncusRouter, simplestreamsRouter, d.authorizer, incusImageSvc)
 
 	internalRouter := api10router.SubGroup("/internal")
 	registerInternalHandler(internalRouter, d.authorizer, db)
