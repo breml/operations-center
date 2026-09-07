@@ -569,14 +569,21 @@ func (s *serverService) DeployByName(ctx context.Context, name string, request p
 		}
 
 		if request.VirtualMediaID == "" {
-			request.VirtualMediaID, err = selectVirtualMediaID(server.BMCData)
+			request.VirtualMediaID, err = selectVirtualMediaID(server.BMCData, request.ImageType)
 			if err != nil {
 				return fmt.Errorf("Failed to select a virtual media device of server %q: %w", name, err)
 			}
 		} else {
-			_, ok := server.BMCData.VirtualMedia[request.VirtualMediaID]
+			media, ok := server.BMCData.VirtualMedia[request.VirtualMediaID]
 			if !ok {
 				return fmt.Errorf("Server %q has no virtual media device %q, the BMC reports %s: %w", name, request.VirtualMediaID, describeVirtualMedia(server.BMCData), domain.ErrOperationNotPermitted)
+			}
+
+			if !virtualMediaSupportsImageType(media, request.ImageType) {
+				return fmt.Errorf(
+					"Virtual media device %q of server %q does not accept a %q image, it supports %s: %w",
+					request.VirtualMediaID, name, request.ImageType, strings.Join(media.MediaTypes, ", "), domain.ErrOperationNotPermitted,
+				)
 			}
 		}
 
@@ -1866,15 +1873,43 @@ const (
 	virtualMediaTransferMethodUpload = string(schemas.UploadTransferMethod)
 )
 
-var virtualMediaOpticalTypes = []string{string(schemas.CDVirtualMediaType), string(schemas.DVDVirtualMediaType)}
+// virtualMediaTypesByImageType holds the virtual media types able to hold an
+// image of a given type. It mirrors, what the BMC adapter derives from the
+// extension of the media URL, so a device, that the attachment would reject, is
+// not picked in the first place.
+var virtualMediaTypesByImageType = map[api.ImageType][]string{
+	api.ImageTypeISO: {string(schemas.CDVirtualMediaType), string(schemas.DVDVirtualMediaType)},
+	api.ImageTypeRaw: {string(schemas.USBStickVirtualMediaType), string(schemas.FloppyVirtualMediaType)},
+}
 
 var virtualMediaServicePrecedence = []string{"system", "manager"}
 
+// virtualMediaAdvertisesImageType reports, whether a virtual media device says
+// itself, that it can hold an image of the given type.
+func virtualMediaAdvertisesImageType(media api.BMCVirtualMedia, imageType api.ImageType) bool {
+	wanted := virtualMediaTypesByImageType[imageType]
+
+	return slices.ContainsFunc(media.MediaTypes, func(mediaType string) bool {
+		return slices.Contains(wanted, mediaType)
+	})
+}
+
+// virtualMediaSupportsImageType reports, whether a virtual media device can hold
+// an image of the given type. A device, that advertises no media type at all,
+// leaves the decision to the BMC.
+func virtualMediaSupportsImageType(media api.BMCVirtualMedia, imageType api.ImageType) bool {
+	if len(media.MediaTypes) == 0 || len(virtualMediaTypesByImageType[imageType]) == 0 {
+		return true
+	}
+
+	return virtualMediaAdvertisesImageType(media, imageType)
+}
+
 // selectVirtualMediaID picks the virtual media device the installation media is
-// attached to, preferring a device advertising CD or DVD support and, among
-// equally suitable devices, one offered by the system over one offered by the
-// manager.
-func selectVirtualMediaID(data api.BMCData) (string, error) {
+// attached to, preferring a device advertising support for the requested image
+// type over one advertising nothing and, among equally suitable devices, one
+// offered by the system over one offered by the manager.
+func selectVirtualMediaID(data api.BMCData, imageType api.ImageType) (string, error) {
 	if len(data.VirtualMedia) == 0 {
 		return "", fmt.Errorf("The BMC reports no virtual media device: %w", domain.ErrNotFound)
 	}
@@ -1882,14 +1917,23 @@ func selectVirtualMediaID(data api.BMCData) (string, error) {
 	ids := virtualMediaIDsByPreference(data)
 
 	for _, id := range ids {
-		for _, mediaType := range data.VirtualMedia[id].MediaTypes {
-			if slices.Contains(virtualMediaOpticalTypes, mediaType) {
-				return id, nil
-			}
+		if virtualMediaAdvertisesImageType(data.VirtualMedia[id], imageType) {
+			return id, nil
 		}
 	}
 
-	return ids[0], nil
+	// Nothing advertises the media type the image needs, so fall back to a
+	// device, that does not say, what it takes.
+	for _, id := range ids {
+		if len(data.VirtualMedia[id].MediaTypes) == 0 {
+			return id, nil
+		}
+	}
+
+	return "", fmt.Errorf(
+		"No virtual media device of the BMC accepts a %q image, it reports %s: %w",
+		imageType, describeVirtualMediaTypes(data), domain.ErrOperationNotPermitted,
+	)
 }
 
 // virtualMediaIDsByPreference returns the IDs of all virtual media devices, the
@@ -1923,4 +1967,25 @@ func describeVirtualMedia(data api.BMCData) string {
 	}
 
 	return strings.Join(slices.Sorted(maps.Keys(data.VirtualMedia)), ", ")
+}
+
+// describeVirtualMediaTypes names every virtual media device along with the
+// media types it advertises, so an operator can tell, which device to ask for.
+func describeVirtualMediaTypes(data api.BMCData) string {
+	if len(data.VirtualMedia) == 0 {
+		return "no virtual media device"
+	}
+
+	descriptions := make([]string, 0, len(data.VirtualMedia))
+
+	for _, id := range slices.Sorted(maps.Keys(data.VirtualMedia)) {
+		mediaTypes := "no media type"
+		if len(data.VirtualMedia[id].MediaTypes) > 0 {
+			mediaTypes = strings.Join(data.VirtualMedia[id].MediaTypes, ", ")
+		}
+
+		descriptions = append(descriptions, fmt.Sprintf("%s (%s)", id, mediaTypes))
+	}
+
+	return strings.Join(descriptions, ", ")
 }

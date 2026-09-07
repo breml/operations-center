@@ -791,20 +791,31 @@ func Test_bmcWaitConditions(t *testing.T) {
 
 func Test_selectVirtualMediaID(t *testing.T) {
 	tests := []struct {
-		name string
-		data api.BMCData
+		name      string
+		data      api.BMCData
+		imageType api.ImageType
 
 		want      string
 		assertErr require.ErrorAssertionFunc
 	}{
 		{
-			name: "the only device",
+			name: "the only device takes the image",
 			data: api.BMCData{VirtualMedia: map[string]api.BMCVirtualMedia{
 				"manager:1": {ID: "manager:1", MediaTypes: []string{"USBStick"}},
 			}},
+			imageType: api.ImageTypeRaw,
 
 			want:      "manager:1",
 			assertErr: require.NoError,
+		},
+		{
+			name: "the only device does not take the image",
+			data: api.BMCData{VirtualMedia: map[string]api.BMCVirtualMedia{
+				"manager:1": {ID: "manager:1", MediaTypes: []string{"USBStick"}},
+			}},
+			imageType: api.ImageTypeISO,
+
+			assertErr: errassert.OperationNotPermittedErrorContains(`manager:1 (USBStick)`),
 		},
 		{
 			name: "the only optical device",
@@ -812,13 +823,26 @@ func Test_selectVirtualMediaID(t *testing.T) {
 				"manager:1": {ID: "manager:1", MediaTypes: []string{"USBStick"}},
 				"system:1":  {ID: "system:1", MediaTypes: []string{"CD", "DVD"}},
 			}},
+			imageType: api.ImageTypeISO,
 
 			want:      "system:1",
 			assertErr: require.NoError,
 		},
 		{
-			name: "no device at all",
-			data: api.BMCData{},
+			name: "the same devices, but a raw image needs the USB one",
+			data: api.BMCData{VirtualMedia: map[string]api.BMCVirtualMedia{
+				"manager:1": {ID: "manager:1", MediaTypes: []string{"USBStick"}},
+				"system:1":  {ID: "system:1", MediaTypes: []string{"CD", "DVD"}},
+			}},
+			imageType: api.ImageTypeRaw,
+
+			want:      "manager:1",
+			assertErr: require.NoError,
+		},
+		{
+			name:      "no device at all",
+			data:      api.BMCData{},
+			imageType: api.ImageTypeISO,
 
 			assertErr: errassert.NotFoundError,
 		},
@@ -828,18 +852,20 @@ func Test_selectVirtualMediaID(t *testing.T) {
 				"system:1": {ID: "system:1", MediaTypes: []string{"CD"}},
 				"system:2": {ID: "system:2", MediaTypes: []string{"DVD"}},
 			}},
+			imageType: api.ImageTypeISO,
 
 			want:      "system:1",
 			assertErr: require.NoError,
 		},
 		{
-			name: "several devices, none of them optical",
+			name: "the device saying nothing wins over the one saying it does not take the image",
 			data: api.BMCData{VirtualMedia: map[string]api.BMCVirtualMedia{
 				"manager:1": {ID: "manager:1", MediaTypes: []string{"USBStick"}},
 				"manager:2": {ID: "manager:2"},
 			}},
+			imageType: api.ImageTypeISO,
 
-			want:      "manager:1",
+			want:      "manager:2",
 			assertErr: require.NoError,
 		},
 		{
@@ -848,6 +874,7 @@ func Test_selectVirtualMediaID(t *testing.T) {
 				"manager:1": {ID: "manager:1", MediaTypes: []string{"CD", "DVD"}},
 				"system:2":  {ID: "system:2", MediaTypes: []string{"CD", "DVD"}},
 			}},
+			imageType: api.ImageTypeISO,
 
 			want:      "system:2",
 			assertErr: require.NoError,
@@ -858,25 +885,38 @@ func Test_selectVirtualMediaID(t *testing.T) {
 				"manager:1": {ID: "manager:1", MediaTypes: []string{"CD", "DVD"}},
 				"system:1":  {ID: "system:1", MediaTypes: []string{"USBStick"}},
 			}},
+			imageType: api.ImageTypeISO,
 
 			want:      "manager:1",
 			assertErr: require.NoError,
 		},
 		{
-			name: "no optical device at all, the one of the system wins",
+			name: "no device advertises anything, the one of the system wins",
+			data: api.BMCData{VirtualMedia: map[string]api.BMCVirtualMedia{
+				"manager:1": {ID: "manager:1"},
+				"system:1":  {ID: "system:1"},
+			}},
+			imageType: api.ImageTypeISO,
+
+			want:      "system:1",
+			assertErr: require.NoError,
+		},
+		{
+			name: "a device advertising the media type wins over one advertising nothing",
 			data: api.BMCData{VirtualMedia: map[string]api.BMCVirtualMedia{
 				"manager:1": {ID: "manager:1", MediaTypes: []string{"USBStick"}},
 				"system:1":  {ID: "system:1"},
 			}},
+			imageType: api.ImageTypeRaw,
 
-			want:      "system:1",
+			want:      "manager:1",
 			assertErr: require.NoError,
 		},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			got, err := selectVirtualMediaID(tc.data)
+			got, err := selectVirtualMediaID(tc.data, tc.imageType)
 
 			tc.assertErr(t, err)
 			require.Equal(t, tc.want, got)

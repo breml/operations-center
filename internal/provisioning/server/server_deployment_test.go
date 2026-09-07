@@ -134,6 +134,7 @@ func deploymentTestBMCData(virtualMedia ...api.BMCVirtualMedia) api.BMCData {
 var (
 	deploymentTestOpticalMedia = api.BMCVirtualMedia{ID: "system:1", MediaTypes: []string{"CD", "DVD"}}
 	deploymentTestUSBMedia     = api.BMCVirtualMedia{ID: "manager:1", MediaTypes: []string{"USBStick"}}
+	deploymentTestUntypedMedia = api.BMCVirtualMedia{ID: "manager:2"}
 )
 
 func TestServerService_DeployByName(t *testing.T) {
@@ -264,7 +265,42 @@ func TestServerService_DeployByName(t *testing.T) {
 				Seed:           "default",
 				ImageType:      api.ImageTypeISO,
 				Architecture:   images.UpdateFileArchitecture64BitX86,
-				VirtualMediaID: "manager:1",
+				VirtualMediaID: "manager:2",
+			},
+			operationsCenterAddress: deploymentTestOperationsCenterAddress,
+			server:                  new(deploymentTestServer("one")),
+			bmcGetData:              deploymentTestBMCData(deploymentTestUntypedMedia, deploymentTestOpticalMedia),
+			tokenSvcGetByUUID:       validToken,
+			tokenSvcGetSeed:         validSeed,
+			withBIOSProfilePort:     true,
+			biosProfileResolve:      &provisioning.BIOSProfileResolution{},
+
+			wantDeployment: &provisioning.ServerDeployment{
+				State: api.ServerDeploymentStateRefreshBMCData,
+				Request: provisioning.ServerDeploymentRequest{
+					TokenUUID:      tokenUUID,
+					Seed:           "default",
+					ImageType:      api.ImageTypeISO,
+					Architecture:   images.UpdateFileArchitecture64BitX86,
+					VirtualMediaID: "manager:2",
+				},
+				ForceReboot:    true,
+				MediaBytesRead: -1,
+				StartedAt:      deploymentTestDate,
+				StateEnteredAt: deploymentTestDate,
+				History:        []api.ServerDeploymentStep{},
+			},
+			wantStatus: api.ServerStatusDeploying,
+			assertErr:  require.NoError,
+		},
+		{
+			name:    "success - a raw image is attached to the USB device, not the optical one",
+			nameArg: "one",
+			requestArg: provisioning.ServerDeploymentRequest{
+				TokenUUID:    tokenUUID,
+				Seed:         "default",
+				ImageType:    api.ImageTypeRaw,
+				Architecture: images.UpdateFileArchitecture64BitX86,
 			},
 			operationsCenterAddress: deploymentTestOperationsCenterAddress,
 			server:                  new(deploymentTestServer("one")),
@@ -279,7 +315,7 @@ func TestServerService_DeployByName(t *testing.T) {
 				Request: provisioning.ServerDeploymentRequest{
 					TokenUUID:      tokenUUID,
 					Seed:           "default",
-					ImageType:      api.ImageTypeISO,
+					ImageType:      api.ImageTypeRaw,
 					Architecture:   images.UpdateFileArchitecture64BitX86,
 					VirtualMediaID: "manager:1",
 				},
@@ -291,6 +327,38 @@ func TestServerService_DeployByName(t *testing.T) {
 			},
 			wantStatus: api.ServerStatusDeploying,
 			assertErr:  require.NoError,
+		},
+		{
+			name:    "error - the explicitly requested virtual media device does not take the image",
+			nameArg: "one",
+			requestArg: provisioning.ServerDeploymentRequest{
+				TokenUUID:      tokenUUID,
+				Seed:           "default",
+				ImageType:      api.ImageTypeISO,
+				Architecture:   images.UpdateFileArchitecture64BitX86,
+				VirtualMediaID: "manager:1",
+			},
+			operationsCenterAddress: deploymentTestOperationsCenterAddress,
+			server:                  new(deploymentTestServer("one")),
+			bmcGetData:              deploymentTestBMCData(deploymentTestUSBMedia, deploymentTestOpticalMedia),
+			tokenSvcGetByUUID:       validToken,
+			tokenSvcGetSeed:         validSeed,
+
+			wantStatus: api.ServerStatusUnregistered,
+			assertErr:  errassert.OperationNotPermittedErrorContains(`does not accept a "iso" image, it supports USBStick`),
+		},
+		{
+			name:                    "error - no virtual media device takes the image",
+			nameArg:                 "one",
+			requestArg:              validRequest,
+			operationsCenterAddress: deploymentTestOperationsCenterAddress,
+			server:                  new(deploymentTestServer("one")),
+			bmcGetData:              deploymentTestBMCData(deploymentTestUSBMedia),
+			tokenSvcGetByUUID:       validToken,
+			tokenSvcGetSeed:         validSeed,
+
+			wantStatus: api.ServerStatusUnregistered,
+			assertErr:  errassert.OperationNotPermittedErrorContains(`No virtual media device of the BMC accepts a "iso" image, it reports manager:1 (USBStick)`),
 		},
 		{
 			name:                    "success - the first matching virtual media device is selected",
