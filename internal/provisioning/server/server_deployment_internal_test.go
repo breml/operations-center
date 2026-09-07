@@ -693,6 +693,30 @@ func Test_bmcWaitConditions(t *testing.T) {
 			want: false,
 		},
 		{
+			name:  "the cancellation has powered the server off and ejected the media",
+			state: api.ServerDeploymentStateWaitCancel,
+			data: api.BMCData{
+				ServerPowerState: bmcPowerStateOff,
+				VirtualMedia: map[string]api.BMCVirtualMedia{
+					"system:1": {ID: "system:1"},
+				},
+			},
+
+			want: true,
+		},
+		{
+			name:  "the cancellation has powered the server off, but the media is still inserted",
+			state: api.ServerDeploymentStateWaitCancel,
+			data: api.BMCData{
+				ServerPowerState: bmcPowerStateOff,
+				VirtualMedia: map[string]api.BMCVirtualMedia{
+					"system:1": {ID: "system:1", Inserted: true, Image: "https://oc.example.com:8443/one.iso"},
+				},
+			},
+
+			want: false,
+		},
+		{
 			name:  "no media is inserted",
 			state: api.ServerDeploymentStateWaitMediaCleared,
 			data: api.BMCData{VirtualMedia: map[string]api.BMCVirtualMedia{

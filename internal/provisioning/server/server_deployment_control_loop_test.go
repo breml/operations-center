@@ -601,6 +601,38 @@ func TestServerService_DeploymentControlLoopDrivesDeploymentToATerminalState(t *
 				require.False(t, world.isPoweredOn(), "a cancelled deployment leaves the server powered off")
 			},
 		},
+		{
+			name:        "cancelled - the BMC completes the ejection after the power off",
+			forceReboot: true,
+			resolution:  deploymentTestResolution(),
+			cancelAt:    api.ServerDeploymentStateWaitInstall,
+			worldOptions: []func(*bmcWorld){
+				func(w *bmcWorld) { w.ejectDelay = worldEjectDelay },
+			},
+
+			wantStates: slices.Concat(
+				deploymentStatesPreparing,
+				deploymentStatesBIOSPass,
+				deploymentStatesBIOSDeferredPass,
+				deploymentStatesSecureBootOff,
+				deploymentStatesSecureBoot,
+				deploymentStatesMediaCleared,
+				deploymentStatesSecureBootSettle,
+				deploymentStatesInstall,
+				deploymentStatesCancel,
+			),
+			wantStatus:       api.ServerStatusUnregistered,
+			wantStatusDetail: api.ServerStatusDetailUnregisteredDeploymentCancelled,
+			assertWorld: func(t *testing.T, world *bmcWorld) {
+				t.Helper()
+
+				require.Empty(
+					t, world.mediaInserted(),
+					"a cancelled deployment waits for the ejection it issued, instead of completing on the power state alone",
+				)
+				require.False(t, world.isPoweredOn(), "a cancelled deployment leaves the server powered off")
+			},
+		},
 	}
 
 	for _, tc := range tests {

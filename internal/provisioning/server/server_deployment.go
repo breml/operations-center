@@ -1268,7 +1268,7 @@ var bmcWaitConditions = map[api.ServerDeploymentState]func(*provisioning.ServerD
 	api.ServerDeploymentStateWaitPowerOffBIOSDeferred:      deploymentPowerIsOff,
 	api.ServerDeploymentStateWaitPowerOffSecureBoot:        deploymentPowerIsOff,
 	api.ServerDeploymentStateWaitPowerOffSecureBootSettled: deploymentPowerIsOff,
-	api.ServerDeploymentStateWaitCancel:                    deploymentPowerIsOff,
+	api.ServerDeploymentStateWaitCancel:                    deploymentCancelSettled,
 	api.ServerDeploymentStateWaitMediaCleared:              deploymentNoMediaInserted,
 	api.ServerDeploymentStateWaitMediaAttached:             deploymentMediaHoldsImage,
 	api.ServerDeploymentStateWaitMediaDetached:             deploymentMediaEjected,
@@ -1276,6 +1276,12 @@ var bmcWaitConditions = map[api.ServerDeploymentState]func(*provisioning.ServerD
 
 func deploymentPowerIsOff(_ *provisioning.ServerDeployment, data api.BMCData) bool {
 	return data.ServerPowerState == bmcPowerStateOff
+}
+
+// deploymentCancelSettled tells, whether the clean up of a cancelled deployment
+// has come through.
+func deploymentCancelSettled(deployment *provisioning.ServerDeployment, data api.BMCData) bool {
+	return deploymentPowerIsOff(deployment, data) && deploymentNoMediaInserted(deployment, data)
 }
 
 func deploymentNoMediaInserted(_ *provisioning.ServerDeployment, data api.BMCData) bool {

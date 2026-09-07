@@ -63,6 +63,7 @@ const (
 	worldEarlyRebootDelay    = 4 * time.Minute
 	worldMediaReadDuration   = 5 * time.Minute
 	worldRegistrationDelay   = 2 * time.Minute
+	worldEjectDelay          = 30 * time.Second
 	worldMediaSize           = 4 * config.ServerDeploymentMediaMinBytesRead
 )
 
@@ -159,6 +160,7 @@ type bmcWorld struct {
 	awaitingPowerOn     bool
 	powerOffErrs        queue.Errs
 	attachMediaErrs     queue.Errs
+	ejectDelay          time.Duration
 }
 
 func newBMCWorld(t *testing.T, clock *testClock, opts ...func(*bmcWorld)) *bmcWorld {
@@ -626,14 +628,34 @@ func deploymentBMCClient(t *testing.T, world *bmcWorld) *adapterMock.BMCServerCl
 			world.calls["DetachMedia"]++
 			world.detachedIDs = append(world.detachedIDs, virtualMediaID)
 
-			media := world.virtualMedia[virtualMediaID]
-			media.Inserted = false
-			media.Image = ""
-			media.ImageName = ""
-			world.virtualMedia[virtualMediaID] = media
+			lastRead := world.mediaProgress[world.mediaDeploymentID].LastRead
+			if !lastRead.IsZero() {
+				world.mediaEjectDelay = world.clock.Now().Sub(lastRead)
+			}
 
-			if world.bootDevice == virtualMediaID {
-				world.bootDevice = ""
+			eject := func(w *bmcWorld) {
+				media := w.virtualMedia[virtualMediaID]
+				media.Inserted = false
+				media.Image = ""
+				media.ImageName = ""
+				w.virtualMedia[virtualMediaID] = media
+
+				if w.bootDevice == virtualMediaID {
+					w.bootDevice = ""
+				}
+			}
+
+			if world.ejectDelay > 0 {
+				world.schedule(world.ejectDelay, "media of "+virtualMediaID+" ejected", func(ctx context.Context, w *bmcWorld) error {
+					w.mu.Lock()
+					defer w.mu.Unlock()
+
+					eject(w)
+
+					return nil
+				})
+			} else {
+				eject(world)
 			}
 
 			// A server, that does not reboot on its own when the first stage of
