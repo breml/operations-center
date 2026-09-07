@@ -109,8 +109,8 @@ the cluster. Providing at least one certificate disables this.
 
 Certificates, which the cluster does already trust, e.g. because they have been
 applied with the seed config of the servers, are not added a second time. They
-are only rendered as comments into the generated Terraform configuration, so
-they can be taken under management later on.
+are imported into the state of the generated Terraform configuration instead, so
+they are managed the same way as the ones added by it.
 
 ## One Off Clustering
 
