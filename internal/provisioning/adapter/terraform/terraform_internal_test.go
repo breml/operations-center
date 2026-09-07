@@ -6,6 +6,7 @@ import (
 	incusapi "github.com/lxc/incus/v7/shared/api"
 	"github.com/stretchr/testify/require"
 
+	securitytls "github.com/FuturFusion/operations-center/internal/security/tls"
 	"github.com/FuturFusion/operations-center/internal/util/testing/testcert"
 )
 
@@ -340,7 +341,7 @@ func Test_incusPreseedWithDefaults_trustedClientCertificates(t *testing.T) {
 
 		assertErr             require.ErrorAssertionFunc
 		wantCertificates      []incusapi.CertificatesPost
-		wantKnownCertificates []incusapi.CertificatesPost
+		wantKnownCertificates []securitytls.TrustedClientCertificate
 	}{
 		{
 			name:                      "no trusted client certificates",
@@ -386,15 +387,18 @@ func Test_incusPreseedWithDefaults_trustedClientCertificates(t *testing.T) {
 					},
 				},
 			},
-			wantKnownCertificates: []incusapi.CertificatesPost{
+			wantKnownCertificates: []securitytls.TrustedClientCertificate{
 				{
-					CertificatePut: incusapi.CertificatePut{
-						Name:        "oc-trusted-" + testcert.SecondClientCertificateFingerprint[:12],
-						Description: "Client trusted by Operations Center",
-						Type:        "client",
-						Projects:    []string{},
-						Certificate: testcert.SecondClientCertificate,
+					CertificatesPost: incusapi.CertificatesPost{
+						CertificatePut: incusapi.CertificatePut{
+							Name:        "oc-trusted-" + testcert.SecondClientCertificateFingerprint[:12],
+							Description: "Client trusted by Operations Center",
+							Type:        "client",
+							Projects:    []string{},
+							Certificate: testcert.SecondClientCertificate,
+						},
 					},
+					Fingerprint: testcert.SecondClientCertificateFingerprint,
 				},
 			},
 		},

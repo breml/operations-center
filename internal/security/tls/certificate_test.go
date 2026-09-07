@@ -142,6 +142,68 @@ Zm9vYmFy
 	}
 }
 
+func TestTrustedClientCertificatesWithFingerprint(t *testing.T) {
+	wantCertificate := securitytls.TrustedClientCertificate{
+		CertificatesPost: incusapi.CertificatesPost{
+			CertificatePut: incusapi.CertificatePut{
+				Name:        "oc-trusted-" + testcert.ClientCertificateFingerprint[:12],
+				Description: "Client trusted by Operations Center",
+				Type:        "client",
+				Restricted:  false,
+				Projects:    []string{},
+				Certificate: testcert.ClientCertificate,
+			},
+		},
+		Fingerprint: testcert.ClientCertificateFingerprint,
+	}
+
+	tests := []struct {
+		name            string
+		certificatesPEM []string
+
+		assertErr require.ErrorAssertionFunc
+		want      []securitytls.TrustedClientCertificate
+	}{
+		{
+			name:            "success - nil",
+			certificatesPEM: nil,
+
+			assertErr: require.NoError,
+			want:      nil,
+		},
+		{
+			name:            "success - single certificate",
+			certificatesPEM: []string{testcert.ClientCertificate},
+
+			assertErr: require.NoError,
+			want:      []securitytls.TrustedClientCertificate{wantCertificate},
+		},
+		{
+			name:            "success - same certificate provided twice",
+			certificatesPEM: []string{testcert.ClientCertificate, testcert.ClientCertificate},
+
+			assertErr: require.NoError,
+			want:      []securitytls.TrustedClientCertificate{wantCertificate},
+		},
+		{
+			name:            "error - not a PEM block",
+			certificatesPEM: []string{"not a certificate"},
+
+			assertErr: require.Error,
+			want:      nil,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := securitytls.TrustedClientCertificatesWithFingerprint(tc.certificatesPEM)
+
+			tc.assertErr(t, err)
+			require.Equal(t, tc.want, got)
+		})
+	}
+}
+
 func TestFilterCertificatesByFingerprints(t *testing.T) {
 	tests := []struct {
 		name            string
