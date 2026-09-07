@@ -38,9 +38,10 @@ type ServerDeploymentPost struct {
 
 	// VirtualMediaID identifies the virtual media device the installation media
 	// is attached to, using the "<service>:<bmc-id>" notation (e.g. "system:1").
-	// Optional, the first virtual media device advertising CD or DVD support is
-	// picked automatically, if it is left empty, the ones offered by the system
-	// taking precedence over the ones offered by the manager.
+	// Optional, the first virtual media device advertising support for the
+	// requested image type is picked automatically, if it is left empty (CD or
+	// DVD for an ISO image, USB stick or floppy for a raw one), the ones offered
+	// by the system taking precedence over the ones offered by the manager.
 	// Example: system:1
 	VirtualMediaID string `json:"virtual_media_id" yaml:"virtual_media_id"`
 
