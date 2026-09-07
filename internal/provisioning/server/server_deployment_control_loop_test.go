@@ -760,6 +760,95 @@ func TestServerService_DeploymentControlLoopSurvivesAServiceRestart(t *testing.T
 	require.Equal(t, api.ServerStatusPending, server.Status)
 }
 
+// TestServerService_DeploymentControlLoopKeepsTheSecureBootSettleBootAcrossARetry
+// drives the deployment through the enrollment of the secure boot certificates
+// and then rewinds it into the enrollment, the way a crash between the write and
+// the transition, that records it, leaves the deployment behind. The BMC reports
+// the key databases as applied by then, so the re-issued enrollment writes
+// nothing, while the firmware still has the certificates to pick up: the settle
+// boot has to run regardless.
+func TestServerService_DeploymentControlLoopKeepsTheSecureBootSettleBootAcrossARetry(t *testing.T) {
+	ctx := t.Context()
+
+	w := setupDeploymentWorld(t, ctx, deploymentWorldConfig{
+		forceReboot: true,
+		resolution:  deploymentTestResolution(),
+	})
+
+	err := w.service.DeployByName(ctx, worldServerName, deploymentTestRequest(w.tokenUUID))
+	require.NoError(t, err)
+
+	for range deploymentDriveIterations {
+		if w.world.callCount("ApplySecureBootCertificates") > 0 {
+			break
+		}
+
+		server, err := w.repo.GetByName(ctx, worldServerName)
+		require.NoError(t, err)
+
+		before := server.StatusInternal.Deployment.State
+
+		require.NoError(t, w.world.settle(ctx))
+		require.NoError(t, w.service.DeploymentControlLoop(ctx, nil))
+
+		after, err := w.repo.GetByName(ctx, worldServerName)
+		require.NoError(t, err)
+
+		advance := deploymentTick
+		if after.StatusInternal.Deployment.State == before {
+			advance = deploymentIdleTick
+		}
+
+		w.clock.advance(advance)
+	}
+
+	require.Equal(t, 1, w.world.callCount("ApplySecureBootCertificates"), "the enrollment has run once")
+
+	crashed, err := w.repo.GetByName(ctx, worldServerName)
+	require.NoError(t, err)
+
+	deployment := crashed.StatusInternal.Deployment
+	require.True(t, deployment.SecureBootAttempted, "the attempt is recorded before the enrollment writes anything")
+
+	// Everything the enrollment produced is gone, only what was persisted before
+	// it ran is left, and the deployment is back in the trigger state.
+	deployment.State = api.ServerDeploymentStateSecureBoot
+	deployment.SecureBootPending = false
+
+	require.NoError(t, w.repo.Update(ctx, *crashed))
+
+	// The key databases hold the certificates now, so the enrollment leaves them
+	// untouched and reports, that it wrote nothing.
+	w.world.mu.Lock()
+	w.world.secureBootEnrolls = false
+	w.world.mu.Unlock()
+
+	server := driveDeployment(t, ctx, w, false)
+
+	require.Equal(t, 2, w.world.callCount("ApplySecureBootCertificates"), "the enrollment is re-issued")
+
+	states := deploymentStateSequence(server)
+
+	retried := slices.Index(states, api.ServerDeploymentStateSecureBoot)
+	require.NotEqual(t, -1, retried)
+
+	retried = slices.Index(states[retried+1:], api.ServerDeploymentStateSecureBoot) + retried + 1
+
+	require.Equal(
+		t,
+		slices.Concat(
+			deploymentStatesMediaCleared,
+			deploymentStatesSecureBootSettle,
+			deploymentStatesInstall,
+			deploymentStatesFinalize,
+		),
+		states[retried+1:],
+		"the re-issued enrollment keeps the settle boot, since an earlier attempt may have written the key databases",
+	)
+
+	require.Equal(t, api.ServerStatusPending, server.Status)
+}
+
 // TestServerService_DeploymentControlLoopLeavesAFailedDeploymentAlone asserts,
 // that a failed deployment is not cleaned up, so an operator can look at the
 // server the way the deployment left it.

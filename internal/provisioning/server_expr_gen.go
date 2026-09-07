@@ -486,6 +486,7 @@ type ExprServerDeployment struct {
 	BIOSPending            bool                            `json:"bios_pending" expr:"bios_pending"`
 	BIOSDeferredPending    bool                            `json:"bios_deferred_pending" expr:"bios_deferred_pending"`
 	SecureBootPending      bool                            `json:"secure_boot_pending" expr:"secure_boot_pending"`
+	SecureBootAttempted    bool                            `json:"secure_boot_attempted" expr:"secure_boot_attempted"`
 	MediaURL               string                          `json:"media_url" expr:"media_url"`
 	ImageCacheID           string                          `json:"image_cache_id" expr:"image_cache_id"`
 	ImageFingerprintID     string                          `json:"image_fingerprint_id" expr:"image_fingerprint_id"`
@@ -1100,6 +1101,7 @@ func ToExprServerDeployment(s ServerDeployment) ExprServerDeployment {
 		BIOSPending:            s.BIOSPending,
 		BIOSDeferredPending:    s.BIOSDeferredPending,
 		SecureBootPending:      s.SecureBootPending,
+		SecureBootAttempted:    s.SecureBootAttempted,
 		MediaURL:               s.MediaURL,
 		ImageCacheID:           s.ImageCacheID,
 		ImageFingerprintID:     s.ImageFingerprintID,

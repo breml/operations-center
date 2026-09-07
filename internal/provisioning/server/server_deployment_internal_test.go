@@ -943,6 +943,10 @@ func Test_deploymentStates(t *testing.T) {
 			var unmarshalled api.ServerDeploymentState
 			require.NoError(t, unmarshalled.UnmarshalText([]byte(state)), "state %q is not a known deployment state", state)
 
+			if definition.kind != deploymentStateKindAction {
+				require.Nil(t, definition.prepare, "state %q is not an action, but prepares one", state)
+			}
+
 			if definition.kind == deploymentStateKindTerminal {
 				require.True(t, state.IsTerminal(), "terminal state %q does not report itself as terminal", state)
 				require.Empty(t, definition.next, "terminal state %q leads somewhere", state)
@@ -974,6 +978,21 @@ func Test_deploymentStates(t *testing.T) {
 			require.Equal(t, deploymentStateKindAction, deploymentStates[definition.fallback].kind, "wait state %q falls back to %q, which is not an action", state, definition.fallback)
 		})
 	}
+}
+
+// Test_deploymentStatesSecureBootRecordsItsAttempt asserts, that the enrollment
+// of the secure boot certificates records, that it is about to run. The record
+// is what tells a re-issued enrollment, that an earlier attempt may have written
+// the key databases already, which the BMC does not report anymore.
+func Test_deploymentStatesSecureBootRecordsItsAttempt(t *testing.T) {
+	prepare := deploymentStates[api.ServerDeploymentStateSecureBoot].prepare
+	require.NotNil(t, prepare, "the enrollment does not record its attempt")
+
+	var deployment provisioning.ServerDeployment
+
+	prepare(&deployment)
+
+	require.True(t, deployment.SecureBootAttempted)
 }
 
 func Test_deploymentStatesAreAllReachable(t *testing.T) {

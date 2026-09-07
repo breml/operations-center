@@ -158,6 +158,13 @@ type ServerDeployment struct {
 	// given a boot to pick them up, before the installation is started.
 	SecureBootPending bool `json:"secure_boot_pending"`
 
+	// SecureBootAttempted records, that the enrollment of the secure boot
+	// certificates has been issued at least once. It is persisted before the
+	// enrollment runs, since the BMC reports the key databases as applied
+	// afterwards, so a re-issued enrollment can not tell an earlier attempt,
+	// that wrote them, apart from a server, that held them all along.
+	SecureBootAttempted bool `json:"secure_boot_attempted"`
+
 	// MediaURL is the installation media, as it is handed to the BMC, while
 	// ImageCacheID and ImageFingerprintID address the generated media, so the
 	// read progress recorded for it can be looked up.

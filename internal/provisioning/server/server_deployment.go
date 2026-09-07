@@ -53,6 +53,12 @@ type deploymentStateDefinition struct {
 	// timeout, which bounds how long a wait may stay unsatisfied, it keeps an
 	// unresponsive BMC from parking the control loop.
 	callTimeout time.Duration
+
+	// prepare records, that the action of the state is about to run, and is
+	// persisted before it does. It belongs to a step, whose side effect can not
+	// be told apart from a no-op once it has been performed, so a re-issued
+	// attempt has to learn from the record instead of from the BMC.
+	prepare func(*provisioning.ServerDeployment)
 }
 
 func (d deploymentStateDefinition) callTimeoutOrDefault() time.Duration {
@@ -163,6 +169,9 @@ var deploymentStates = map[api.ServerDeploymentState]deploymentStateDefinition{
 		detail:      api.ServerStatusDetailDeployingConfiguringBIOS,
 		next:        api.ServerDeploymentStateClearMedia,
 		callTimeout: config.ServerDeploymentSecureBootCallTimeout,
+		prepare: func(deployment *provisioning.ServerDeployment) {
+			deployment.SecureBootAttempted = true
+		},
 	},
 	api.ServerDeploymentStateClearMedia: {
 		kind:   deploymentStateKindAction,
@@ -885,6 +894,16 @@ func (s *serverService) deploymentAction(ctx context.Context, log *slog.Logger, 
 		}
 	}
 
+	// Record, that the action is about to be performed, before it is, so a
+	// re-issued attempt knows about the side effect of the one before it, which
+	// the BMC does not report anymore.
+	if definition.prepare != nil {
+		err := s.updateDeployment(ctx, server.Name, definition.prepare)
+		if err != nil {
+			return false, err
+		}
+	}
+
 	log.InfoContext(ctx, "Deployment action triggered", slog.Int("retries", deployment.Retries))
 
 	mutate, err := s.runBoundedDeploymentAction(ctx, log, server, definition)
@@ -1005,13 +1024,15 @@ func (s *serverService) runDeploymentAction(ctx context.Context, log *slog.Logge
 		return s.verifyDeploymentBIOSAttributes(ctx, log, server)
 
 	case api.ServerDeploymentStateSecureBoot:
+		attempted := deployment.SecureBootAttempted
+
 		enrolled, err := s.applySecureBootCertificatesByName(ctx, server.Name, deployment.SecureBoot)
 		if err != nil {
 			return nil, err
 		}
 
 		return func(deployment *provisioning.ServerDeployment) {
-			deployment.SecureBootPending = enrolled
+			deployment.SecureBootPending = enrolled || attempted
 		}, nil
 
 	case api.ServerDeploymentStateClearMedia:
