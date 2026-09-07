@@ -94,16 +94,45 @@ func FilterCertificatesByFingerprints(certificatesPEM []string, fingerprints []s
 	return filteredCertificates, nil
 }
 
+type TrustedClientCertificate struct {
+	incusapi.CertificatesPost
+
+	Fingerprint string
+}
+
 // TrustedClientCertificates converts the given X509 PEM encoded client
 // certificates into Incus certificate definitions.
 //
 // The name of each certificate is derived from its SHA256 fingerprint.
 func TrustedClientCertificates(certificatesPEM []string) ([]incusapi.CertificatesPost, error) {
+	trustedCertificates, err := TrustedClientCertificatesWithFingerprint(certificatesPEM)
+	if err != nil {
+		return nil, err
+	}
+
+	if len(trustedCertificates) == 0 {
+		return nil, nil
+	}
+
+	certificates := make([]incusapi.CertificatesPost, 0, len(trustedCertificates))
+	for _, trustedCertificate := range trustedCertificates {
+		certificates = append(certificates, trustedCertificate.CertificatesPost)
+	}
+
+	return certificates, nil
+}
+
+// TrustedClientCertificatesWithFingerprint converts the given X509 PEM encoded
+// client certificates into Incus certificate definitions, each together with
+// the SHA256 fingerprint of the respective certificate.
+//
+// The name of each certificate is derived from its SHA256 fingerprint.
+func TrustedClientCertificatesWithFingerprint(certificatesPEM []string) ([]TrustedClientCertificate, error) {
 	if len(certificatesPEM) == 0 {
 		return nil, nil
 	}
 
-	certificates := make([]incusapi.CertificatesPost, 0, len(certificatesPEM))
+	certificates := make([]TrustedClientCertificate, 0, len(certificatesPEM))
 	seenFingerprints := make(map[string]struct{}, len(certificatesPEM))
 
 	for _, certificatePEM := range certificatesPEM {
@@ -122,15 +151,18 @@ func TrustedClientCertificates(certificatesPEM []string) ([]incusapi.Certificate
 
 		seenFingerprints[fingerprint] = struct{}{}
 
-		certificates = append(certificates, incusapi.CertificatesPost{
-			CertificatePut: incusapi.CertificatePut{
-				Name:        trustedClientCertificateNamePrefix + fingerprint[:12],
-				Description: "Client trusted by Operations Center",
-				Type:        "client",
-				Restricted:  false,
-				Projects:    []string{},
-				Certificate: certificatePEM,
+		certificates = append(certificates, TrustedClientCertificate{
+			CertificatesPost: incusapi.CertificatesPost{
+				CertificatePut: incusapi.CertificatePut{
+					Name:        trustedClientCertificateNamePrefix + fingerprint[:12],
+					Description: "Client trusted by Operations Center",
+					Type:        "client",
+					Restricted:  false,
+					Projects:    []string{},
+					Certificate: certificatePEM,
+				},
 			},
+			Fingerprint: fingerprint,
 		})
 	}
 
