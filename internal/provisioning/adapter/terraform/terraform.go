@@ -256,7 +256,7 @@ func cleanup(path string) func() error {
 // incusPreseedWithDefaults returns the Incus preseed for the cluster, which is
 // provisioned by Operations Center, together with the Incus certificate
 // definitions for the client certificates, the cluster does already trust.
-func incusPreseedWithDefaults(config map[string]any, trustedClientCertificates []string, knownTrustedClientCertificates []string) (_ incusapi.InitLocalPreseed, knownCertificates []incusapi.CertificatesPost, _ error) {
+func incusPreseedWithDefaults(config map[string]any, trustedClientCertificates []string, knownTrustedClientCertificates []string) (_ incusapi.InitLocalPreseed, knownCertificates []securitytls.TrustedClientCertificate, _ error) {
 	body, err := json.Marshal(config)
 	if err != nil {
 		return incusapi.InitLocalPreseed{}, nil, err
@@ -575,7 +575,7 @@ func incusPreseedWithDefaults(config map[string]any, trustedClientCertificates [
 			return incusapi.InitLocalPreseed{}, nil, fmt.Errorf("Failed to derive Incus certificates from the trusted client certificates: %w", err)
 		}
 
-		knownCertificates, err = securitytls.TrustedClientCertificates(knownTrustedClientCertificates)
+		knownCertificates, err = securitytls.TrustedClientCertificatesWithFingerprint(knownTrustedClientCertificates)
 		if err != nil {
 			return incusapi.InitLocalPreseed{}, nil, fmt.Errorf("Failed to derive Incus certificates from the already trusted client certificates: %w", err)
 		}
