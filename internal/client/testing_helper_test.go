@@ -22,7 +22,16 @@ import (
 	"github.com/FuturFusion/operations-center/shared/api/system"
 )
 
-func daemonSetup(t *testing.T) (socketClient client.OperationsCenterClient, unauthorizedHTTPClient client.OperationsCenterClient, db *sql.DB) {
+// testDaemon bundles a running Operations Center daemon together with the
+// clients and the database handle necessary to drive it from a test.
+type testDaemon struct {
+	socketClient           client.OperationsCenterClient
+	authorizedHTTPClient   client.OperationsCenterClient
+	unauthorizedHTTPClient client.OperationsCenterClient
+	db                     *sql.DB
+}
+
+func daemonSetup(t *testing.T) testDaemon {
 	t.Helper()
 	ctx := t.Context()
 
@@ -101,16 +110,19 @@ func daemonSetup(t *testing.T) (socketClient client.OperationsCenterClient, unau
 		require.NoError(t, err)
 	})
 
-	socketClient, err = client.New("http://unix.socket/", client.WithForceLocal(filepath.Join(tmpDir, "unix.socket")))
+	socketClient, err := client.New("http://unix.socket/", client.WithForceLocal(filepath.Join(tmpDir, "unix.socket")))
 	require.NoError(t, err)
 
 	serverCert, err := incustls.ReadCert(filepath.Join(tmpDir, "server.crt"))
 	require.NoError(t, err)
 
-	unauthorizedHTTPClient, err = client.New("https://localhost:"+port, client.WithTrustedServerCertificate(serverCert)) // without client.WithClientCertificate(cert)
+	authorizedHTTPClient, err := client.New("https://localhost:"+port, client.WithTrustedServerCertificate(serverCert), client.WithClientCertificate(cert))
 	require.NoError(t, err)
 
-	db, err = dbdriver.Open(tmpDir)
+	unauthorizedHTTPClient, err := client.New("https://localhost:"+port, client.WithTrustedServerCertificate(serverCert)) // without client.WithClientCertificate(cert)
+	require.NoError(t, err)
+
+	db, err := dbdriver.Open(tmpDir)
 	require.NoError(t, err)
 
 	t.Cleanup(func() {
@@ -118,7 +130,12 @@ func daemonSetup(t *testing.T) (socketClient client.OperationsCenterClient, unau
 		require.NoError(t, err)
 	})
 
-	return socketClient, unauthorizedHTTPClient, db
+	return testDaemon{
+		socketClient:           socketClient,
+		authorizedHTTPClient:   authorizedHTTPClient,
+		unauthorizedHTTPClient: unauthorizedHTTPClient,
+		db:                     db,
+	}
 }
 
 func getFreeTCPPort(t *testing.T) string {
