@@ -64,6 +64,15 @@ func (c OperationsCenterClient) CreateToken(ctx context.Context, newToken api.To
 	return nil
 }
 
+func (c OperationsCenterClient) UpdateToken(ctx context.Context, id string, token api.TokenPut) error {
+	_, err := c.DoRequest(ctx, http.MethodPut, path.Join("/provisioning/tokens", id), nil, token)
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
 func (c OperationsCenterClient) DeleteToken(ctx context.Context, id string) error {
 	_, err := c.DoRequest(ctx, http.MethodDelete, path.Join("/provisioning/tokens", id), nil, nil)
 	if err != nil {
