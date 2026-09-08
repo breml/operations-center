@@ -48,7 +48,9 @@ type ServerDeploymentPost struct {
 	// Force requests, that a token seed, which does not reboot the server upon
 	// completion of the installation ("force_reboot"), is accepted. The
 	// deployment then relies on the read progress of the installation media
-	// alone to tell, when the first stage of the installation is done.
+	// alone to tell, when the first stage of the installation is done, so it
+	// needs a virtual media device, that streams the media rather than uploading
+	// it before the server boots.
 	// Example: false
 	Force bool `json:"force" yaml:"force"`
 
