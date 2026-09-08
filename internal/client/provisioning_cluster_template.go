@@ -52,6 +52,28 @@ func (c OperationsCenterClient) CreateClusterTemplate(ctx context.Context, clust
 	return nil
 }
 
+func (c OperationsCenterClient) UpdateClusterTemplate(ctx context.Context, name string, clusterTemplate api.ClusterTemplatePut) error {
+	_, err := c.DoRequest(ctx, http.MethodPut, path.Join("/provisioning/cluster-templates", name), nil, clusterTemplate)
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (c OperationsCenterClient) RenameClusterTemplate(ctx context.Context, name string, newName string) error {
+	_, err := c.DoRequest(ctx, http.MethodPost, path.Join("/provisioning/cluster-templates", name), nil, api.ClusterTemplate{
+		ClusterTemplatePost: api.ClusterTemplatePost{
+			Name: newName,
+		},
+	})
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
 func (c OperationsCenterClient) DeleteClusterTemplate(ctx context.Context, name string) error {
 	_, err := c.DoRequest(ctx, http.MethodDelete, path.Join("/provisioning/cluster-templates", name), nil, nil)
 	if err != nil {
