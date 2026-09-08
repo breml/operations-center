@@ -18,7 +18,7 @@ import (
 )
 
 func Test_GetWithFilterNetworkIntegrations(t *testing.T) {
-	socketClient, unauthorizedHTTPClient, db := daemonSetup(t)
+	d := daemonSetup(t)
 
 	tests := []struct {
 		name       string
@@ -30,7 +30,7 @@ func Test_GetWithFilterNetworkIntegrations(t *testing.T) {
 	}{
 		{
 			name:       "success - empty list",
-			client:     socketClient,
+			client:     d.socketClient,
 			dbSeedFunc: noop,
 
 			assertErr: require.NoError,
@@ -42,18 +42,18 @@ func Test_GetWithFilterNetworkIntegrations(t *testing.T) {
 		},
 		{
 			name:   "success - one record",
-			client: socketClient,
+			client: d.socketClient,
 
 			dbSeedFunc: func(t *testing.T) {
 				t.Helper()
 
-				_, err := provisioningEntities.CreateCluster(t.Context(), db, provisioning.Cluster{
+				_, err := provisioningEntities.CreateCluster(t.Context(), d.db, provisioning.Cluster{
 					Name:    "clusterOne",
 					Channel: "stable",
 				})
 				require.NoError(t, err)
 
-				_, err = entities.CreateNetworkIntegration(t.Context(), db, inventory.NetworkIntegration{
+				_, err = entities.CreateNetworkIntegration(t.Context(), d.db, inventory.NetworkIntegration{
 					UUID:    uuidgen.FromPattern(t, "1"),
 					Name:    "one",
 					Cluster: "clusterOne",
@@ -71,7 +71,7 @@ func Test_GetWithFilterNetworkIntegrations(t *testing.T) {
 		},
 		{
 			name:       "error - not authorized",
-			client:     unauthorizedHTTPClient,
+			client:     d.unauthorizedHTTPClient,
 			dbSeedFunc: noop,
 
 			assertErr: func(tt require.TestingT, err error, a ...any) {
@@ -96,7 +96,7 @@ func Test_GetWithFilterNetworkIntegrations(t *testing.T) {
 }
 
 func Test_GetNetworkIntegration(t *testing.T) {
-	socketClient, unauthorizedHTTPClient, db := daemonSetup(t)
+	d := daemonSetup(t)
 
 	tests := []struct {
 		name       string
@@ -110,17 +110,17 @@ func Test_GetNetworkIntegration(t *testing.T) {
 	}{
 		{
 			name:   "success - one record",
-			client: socketClient,
+			client: d.socketClient,
 			dbSeedFunc: func(t *testing.T) {
 				t.Helper()
 
-				_, err := provisioningEntities.CreateCluster(t.Context(), db, provisioning.Cluster{
+				_, err := provisioningEntities.CreateCluster(t.Context(), d.db, provisioning.Cluster{
 					Name:    "clusterOne",
 					Channel: "stable",
 				})
 				require.NoError(t, err)
 
-				_, err = entities.CreateNetworkIntegration(t.Context(), db, inventory.NetworkIntegration{
+				_, err = entities.CreateNetworkIntegration(t.Context(), d.db, inventory.NetworkIntegration{
 					UUID:    uuidgen.FromPattern(t, "1"),
 					Name:    "foo",
 					Cluster: "clusterOne",
@@ -139,7 +139,7 @@ func Test_GetNetworkIntegration(t *testing.T) {
 		},
 		{
 			name:       "error - not authorized",
-			client:     unauthorizedHTTPClient,
+			client:     d.unauthorizedHTTPClient,
 			dbSeedFunc: noop,
 
 			tcNameArg: "foo",
@@ -153,7 +153,7 @@ func Test_GetNetworkIntegration(t *testing.T) {
 		},
 		{
 			name:       "error - not found",
-			client:     socketClient,
+			client:     d.socketClient,
 			dbSeedFunc: noop,
 
 			tcNameArg: uuidgen.FromPattern(t, "2").String(),
