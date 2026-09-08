@@ -13,7 +13,7 @@ import (
 )
 
 func Test_GetClusterTemplates(t *testing.T) {
-	socketClient, unauthorizedHTTPClient, db := daemonSetup(t)
+	d := daemonSetup(t)
 
 	tests := []struct {
 		name       string
@@ -25,7 +25,7 @@ func Test_GetClusterTemplates(t *testing.T) {
 	}{
 		{
 			name:       "success - empty list",
-			client:     socketClient,
+			client:     d.socketClient,
 			dbSeedFunc: noop,
 
 			assertErr: require.NoError,
@@ -37,12 +37,12 @@ func Test_GetClusterTemplates(t *testing.T) {
 		},
 		{
 			name:   "success - one record",
-			client: socketClient,
+			client: d.socketClient,
 
 			dbSeedFunc: func(t *testing.T) {
 				t.Helper()
 
-				_, err := entities.CreateClusterTemplate(t.Context(), db, provisioning.ClusterTemplate{
+				_, err := entities.CreateClusterTemplate(t.Context(), d.db, provisioning.ClusterTemplate{
 					Name: "foo",
 				})
 				require.NoError(t, err)
@@ -57,8 +57,21 @@ func Test_GetClusterTemplates(t *testing.T) {
 			},
 		},
 		{
+			name:       "success - authorized with TLS client certificate",
+			client:     d.authorizedHTTPClient,
+			dbSeedFunc: noop,
+
+			assertErr: require.NoError,
+			assertFunc: func(t *testing.T, result []api.ClusterTemplate) {
+				t.Helper()
+
+				require.Len(t, result, 1)
+				require.Equal(t, "foo", result[0].Name)
+			},
+		},
+		{
 			name:       "error - not authorized",
-			client:     unauthorizedHTTPClient,
+			client:     d.unauthorizedHTTPClient,
 			dbSeedFunc: noop,
 
 			assertErr: func(tt require.TestingT, err error, a ...any) {
@@ -83,7 +96,7 @@ func Test_GetClusterTemplates(t *testing.T) {
 }
 
 func Test_GetClusterTemplate(t *testing.T) {
-	socketClient, unauthorizedHTTPClient, db := daemonSetup(t)
+	d := daemonSetup(t)
 
 	tests := []struct {
 		name       string
@@ -97,11 +110,11 @@ func Test_GetClusterTemplate(t *testing.T) {
 	}{
 		{
 			name:   "success - one record",
-			client: socketClient,
+			client: d.socketClient,
 			dbSeedFunc: func(t *testing.T) {
 				t.Helper()
 
-				_, err := entities.CreateClusterTemplate(t.Context(), db, provisioning.ClusterTemplate{
+				_, err := entities.CreateClusterTemplate(t.Context(), d.db, provisioning.ClusterTemplate{
 					Name: "foo",
 				})
 				require.NoError(t, err)
@@ -118,7 +131,7 @@ func Test_GetClusterTemplate(t *testing.T) {
 		},
 		{
 			name:       "error - not authorized",
-			client:     unauthorizedHTTPClient,
+			client:     d.unauthorizedHTTPClient,
 			dbSeedFunc: noop,
 
 			tcNameArg: "foo",
@@ -132,7 +145,7 @@ func Test_GetClusterTemplate(t *testing.T) {
 		},
 		{
 			name:       "error - not found",
-			client:     socketClient,
+			client:     d.socketClient,
 			dbSeedFunc: noop,
 
 			tcNameArg: "unknown",
@@ -159,7 +172,7 @@ func Test_GetClusterTemplate(t *testing.T) {
 }
 
 func Test_CreateClusterTemplate(t *testing.T) {
-	socketClient, unauthorizedHTTPClient, db := daemonSetup(t)
+	d := daemonSetup(t)
 
 	tests := []struct {
 		name       string
@@ -172,7 +185,7 @@ func Test_CreateClusterTemplate(t *testing.T) {
 	}{
 		{
 			name:       "success",
-			client:     socketClient,
+			client:     d.socketClient,
 			dbSeedFunc: noop,
 
 			clusterTemplate: api.ClusterTemplatePost{
@@ -186,7 +199,7 @@ func Test_CreateClusterTemplate(t *testing.T) {
 		},
 		{
 			name:       "error - not authorized",
-			client:     unauthorizedHTTPClient,
+			client:     d.unauthorizedHTTPClient,
 			dbSeedFunc: noop,
 
 			assertErr: func(tt require.TestingT, err error, a ...any) {
@@ -195,7 +208,7 @@ func Test_CreateClusterTemplate(t *testing.T) {
 		},
 		{
 			name:       "error - validation",
-			client:     socketClient,
+			client:     d.socketClient,
 			dbSeedFunc: noop,
 
 			clusterTemplate: api.ClusterTemplatePost{
@@ -209,11 +222,11 @@ func Test_CreateClusterTemplate(t *testing.T) {
 		},
 		{
 			name:   "error - confilict",
-			client: socketClient,
+			client: d.socketClient,
 			dbSeedFunc: func(t *testing.T) {
 				t.Helper()
 
-				_, err := entities.CreateClusterTemplate(t.Context(), db, provisioning.ClusterTemplate{
+				_, err := entities.CreateClusterTemplate(t.Context(), d.db, provisioning.ClusterTemplate{
 					Name: "foo",
 				})
 				require.NoError(t, err)
@@ -239,7 +252,7 @@ func Test_CreateClusterTemplate(t *testing.T) {
 }
 
 func Test_DeleteClusterTemplate(t *testing.T) {
-	socketClient, unauthorizedHTTPClient, db := daemonSetup(t)
+	d := daemonSetup(t)
 
 	tests := []struct {
 		name       string
@@ -252,11 +265,11 @@ func Test_DeleteClusterTemplate(t *testing.T) {
 	}{
 		{
 			name:   "success - one record",
-			client: socketClient,
+			client: d.socketClient,
 			dbSeedFunc: func(t *testing.T) {
 				t.Helper()
 
-				_, err := entities.CreateClusterTemplate(t.Context(), db, provisioning.ClusterTemplate{
+				_, err := entities.CreateClusterTemplate(t.Context(), d.db, provisioning.ClusterTemplate{
 					Name: "foo",
 				})
 				require.NoError(t, err)
@@ -268,7 +281,7 @@ func Test_DeleteClusterTemplate(t *testing.T) {
 		},
 		{
 			name:       "error - not authorized",
-			client:     unauthorizedHTTPClient,
+			client:     d.unauthorizedHTTPClient,
 			dbSeedFunc: noop,
 
 			tcNameArg: "foo",
@@ -279,7 +292,7 @@ func Test_DeleteClusterTemplate(t *testing.T) {
 		},
 		{
 			name:       "error - not found",
-			client:     socketClient,
+			client:     d.socketClient,
 			dbSeedFunc: noop,
 
 			tcNameArg: "unknown",
