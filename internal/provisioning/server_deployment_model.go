@@ -1,7 +1,6 @@
 package provisioning
 
 import (
-	"net/url"
 	"slices"
 	"time"
 
@@ -166,11 +165,9 @@ type ServerDeployment struct {
 	SecureBootAttempted bool `json:"secure_boot_attempted"`
 
 	// MediaURL is the installation media, as it is handed to the BMC, while
-	// ImageCacheID and ImageFingerprintID address the generated media, so the
-	// read progress recorded for it can be looked up.
-	MediaURL           string `json:"media_url"`
-	ImageCacheID       string `json:"image_cache_id"`
-	ImageFingerprintID string `json:"image_fingerprint_id"`
+	// ImageDeploymentID names this deployment reading the generated media.
+	MediaURL          string `json:"media_url"`
+	ImageDeploymentID string `json:"image_deployment_id"`
 
 	// BIOSTaskMonitor holds the URI of the BMC task monitor of the application
 	// of the BIOS attributes. It is kept, since the server is powered on before
@@ -246,31 +243,6 @@ func (d *ServerDeployment) transition(now time.Time, state api.ServerDeploymentS
 	if state.IsTerminal() {
 		d.FinishedAt = now
 	}
-}
-
-// SeedImageID returns the identity of the generated installation media of the
-// deployment. It is only set once the media has been attached.
-func (d ServerDeployment) SeedImageID() SeedImageID {
-	return SeedImageID{
-		CacheID:       d.ImageCacheID,
-		FingerprintID: d.ImageFingerprintID,
-	}
-}
-
-// BMCSource returns the address, the BMC of the server is expected to read the
-// installation media from.
-func (s Server) BMCSource() string {
-	endpoint := s.BMCConfig.Endpoint
-	if endpoint == "" {
-		return ""
-	}
-
-	endpointURL, err := url.Parse(endpoint)
-	if err != nil || endpointURL.Host == "" {
-		return SeedImageSource(endpoint)
-	}
-
-	return SeedImageSource(endpointURL.Host)
 }
 
 func (d ServerDeployment) ToAPI() *api.ServerDeploymentStatus {

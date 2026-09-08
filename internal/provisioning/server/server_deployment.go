@@ -1068,6 +1068,10 @@ func (s *serverService) runDeploymentAction(ctx context.Context, log *slog.Logge
 func (s *serverService) attachDeploymentMedia(ctx context.Context, server provisioning.Server) (func(*provisioning.ServerDeployment), error) {
 	request := server.StatusInternal.Deployment.Request
 
+	if s.seedImageProgress != nil {
+		s.seedImageProgress.Reset(ctx, deploymentID)
+	}
+
 	attached, err := s.bmcAttachMediaByName(ctx, server.Name, api.ServerBMCAttachMedia{
 		TokenUUID:      request.TokenUUID.String(),
 		Seed:           request.Seed,
@@ -1076,41 +1080,29 @@ func (s *serverService) attachDeploymentMedia(ctx context.Context, server provis
 		Channel:        request.Channel,
 		VirtualMediaID: request.VirtualMediaID,
 		SetBootDevice:  true,
-	}, false)
+	}, deploymentID, false)
 	if err != nil {
 		return nil, err
 	}
 
-	imageID := provisioning.SeedImageID{
-		CacheID:       provisioning.SeedImageCacheID(request.TokenUUID, request.Seed, request.ImageType, request.Architecture, request.Channel),
-		FingerprintID: attached.fingerprintID,
-	}
-
-	s.resetDeploymentMediaProgress(ctx, imageID)
-
 	return func(deployment *provisioning.ServerDeployment) {
 		deployment.MediaURL = attached.imageURL
-		deployment.ImageCacheID = imageID.CacheID
-		deployment.ImageFingerprintID = imageID.FingerprintID
+		deployment.ImageDeploymentID = deploymentID
 		deployment.MediaBytesRead = -1
 		deployment.MediaSize = 0
 	}, nil
 }
 
-func (s *serverService) resetDeploymentMediaProgress(ctx context.Context, imageID provisioning.SeedImageID) {
-	if s.seedImageProgress == nil || imageID.FingerprintID == "" {
-		return
+// cleanupDeploymentMedia drops the read progress recorded for the installation
+// media of this deployment and ejects it.
+func (s *serverService) cleanupDeploymentMedia(ctx context.Context, server provisioning.Server) error {
+	deployment := server.StatusInternal.Deployment
+
+	if s.seedImageProgress != nil && deployment.ImageDeploymentID != "" {
+		s.seedImageProgress.Reset(ctx, deployment.ImageDeploymentID)
 	}
 
-	s.seedImageProgress.Reset(ctx, imageID)
-}
-
-// cleanupDeploymentMedia drops the read progress recorded for the installation
-// media and ejects it.
-func (s *serverService) cleanupDeploymentMedia(ctx context.Context, server provisioning.Server) error {
-	s.resetDeploymentMediaProgress(ctx, server.StatusInternal.Deployment.SeedImageID())
-
-	return s.detachDeploymentMedia(ctx, server, server.StatusInternal.Deployment.Request.VirtualMediaID)
+	return s.detachDeploymentMedia(ctx, server, deployment.Request.VirtualMediaID)
 }
 
 // detachAllDeploymentMedia ejects the media of every virtual media device, that
@@ -1607,7 +1599,7 @@ func (s *serverService) checkDeploymentInstalled(ctx context.Context, log *slog.
 func (s *serverService) deploymentMediaProgress(ctx context.Context, server provisioning.Server) (provisioning.SeedImageProgress, bool) {
 	deployment := server.StatusInternal.Deployment
 
-	if s.seedImageProgress == nil || deployment.ImageFingerprintID == "" {
+	if s.seedImageProgress == nil || deployment.ImageDeploymentID == "" {
 		return provisioning.SeedImageProgress{}, false
 	}
 
@@ -1616,46 +1608,18 @@ func (s *serverService) deploymentMediaProgress(ctx context.Context, server prov
 		return provisioning.SeedImageProgress{}, false
 	}
 
-	source := server.BMCSource()
-
-	if source != "" {
-		progress, ok := s.seedImageProgress.Get(ctx, deployment.SeedImageID(), source)
-		if ok {
-			return progress, true
-		}
-	}
-
-	// A BMC does not necessarily read the installation media from the address,
-	// its Redfish API is reached at.
-	recorded := s.seedImageProgress.GetByImage(ctx, deployment.SeedImageID())
-	if len(recorded) == 1 {
+	progress, ok := s.seedImageProgress.Get(ctx, deployment.ImageDeploymentID)
+	if !ok {
 		slog.DebugContext(
-			ctx, "The BMC reads the installation media from another address than its Redfish API is reached at",
+			ctx, "The BMC has not read anything of the installation media yet",
 			slog.String("name", server.Name),
-			slog.String("image_id", deployment.SeedImageID().String()),
-			slog.String("bmc_source", source),
-			slog.String("media_source", recorded[0].Source),
+			slog.String("deployment_id", deployment.ImageDeploymentID),
 		)
 
-		return recorded[0], true
+		return provisioning.SeedImageProgress{}, false
 	}
 
-	if slog.Default().Enabled(ctx, slog.LevelDebug) {
-		sources := make([]string, 0, len(recorded))
-		for _, progress := range recorded {
-			sources = append(sources, fmt.Sprintf("%s=%d", progress.Source, progress.BytesCovered))
-		}
-
-		slog.DebugContext(
-			ctx, "No read progress of the installation media can be attributed to the server",
-			slog.String("name", server.Name),
-			slog.String("image_id", deployment.SeedImageID().String()),
-			slog.String("bmc_source", source),
-			slog.String("recorded_sources", strings.Join(sources, " ")),
-		)
-	}
-
-	return provisioning.SeedImageProgress{}, false
+	return progress, true
 }
 
 // deploymentInstallCouldBeDone reports, whether the first stage of the

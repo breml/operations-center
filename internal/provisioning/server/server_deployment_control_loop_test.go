@@ -212,7 +212,15 @@ func TestServerService_DeploymentControlLoopDrivesDeploymentToATerminalState(t *
 			assertWorld: func(t *testing.T, world *bmcWorld) {
 				t.Helper()
 
-				require.Equal(t, 2, world.mediaResets, "the read progress is dropped when the media is attached and again when it is cleaned up")
+				require.Equal(t, 2, world.mediaResets, "the read progress is dropped when the media is attached and again when the deployment is cleaned up")
+
+				// A server, that does not reboot on its own, is installed and
+				// waiting for the media to go, so the idle period is the whole
+				// latency of the only signal telling the deployment about it.
+				require.LessOrEqual(
+					t, world.mediaEjectedAfter(), deploymentMaxMediaEjectDelay,
+					"the media is ejected right after the installer stopped reading it",
+				)
 			},
 		},
 		{
@@ -229,7 +237,7 @@ func TestServerService_DeploymentControlLoopDrivesDeploymentToATerminalState(t *
 			wantStates:       deploymentStatesHappyPath(),
 			wantStatus:       api.ServerStatusPending,
 			wantStatusDetail: api.ServerStatusDetailPendingRegistering,
-			assertLog:        log.Contains("The BMC reads the installation media from another address"),
+			assertLog:        log.Contains("Installation completed, the installation media has been read and is idle"),
 		},
 		{
 			name:        "success - the BMC uploads the installation media instead of streaming it",

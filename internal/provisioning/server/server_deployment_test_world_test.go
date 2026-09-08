@@ -6,9 +6,11 @@ import (
 	"crypto/tls"
 	"io"
 	"maps"
+	"net/url"
 	"os"
 	"path"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -129,10 +131,10 @@ type bmcWorld struct {
 
 	secureBootPending bool
 
-	mediaProgress   map[string]provisioning.SeedImageProgress
-	mediaReadStart  time.Time
-	mediaProgressID provisioning.SeedImageID
-	mediaResets     int
+	mediaProgress     map[string]provisioning.SeedImageProgress
+	mediaReadStart    time.Time
+	mediaDeploymentID string
+	mediaResets       int
 
 	register func(ctx context.Context) error
 
@@ -375,18 +377,12 @@ func (w *bmcWorld) scheduleRegistration() {
 
 // recordMediaProgress has to be called with the lock held.
 func (w *bmcWorld) recordMediaProgress() {
-	if w.mediaProgressID.FingerprintID == "" {
+	if w.mediaDeploymentID == "" {
 		return
 	}
 
-	source := provisioning.SeedImageSource(worldBMCHost)
-	if w.mediaFromOtherHost {
-		source = provisioning.SeedImageSource("192.168.1.101")
-	}
-
-	w.mediaProgress[source] = provisioning.SeedImageProgress{
-		ImageID:      w.mediaProgressID,
-		Source:       source,
+	w.mediaProgress[w.mediaDeploymentID] = provisioning.SeedImageProgress{
+		DeploymentID: w.mediaDeploymentID,
 		Size:         worldMediaSize,
 		BytesServed:  worldMediaSize,
 		BytesCovered: worldMediaSize,
@@ -618,6 +614,8 @@ func deploymentBMCClient(t *testing.T, world *bmcWorld) *adapterMock.BMCServerCl
 				world.bootDevice = virtualMediaID
 			}
 
+			world.mediaDeploymentID = deploymentIDFromMediaURL(t, mediaURL)
+
 			return monitor(world), nil
 		},
 
@@ -690,40 +688,38 @@ func deploymentBMCClient(t *testing.T, world *bmcWorld) *adapterMock.BMCServerCl
 	}
 }
 
+func deploymentIDFromMediaURL(t *testing.T, mediaURL string) string {
+	t.Helper()
+
+	parsed, err := url.Parse(mediaURL)
+	require.NoError(t, err)
+
+	segments := strings.Split(strings.Trim(parsed.Path, "/"), "/")
+
+	i := slices.Index(segments, "deployment")
+	require.NotEqual(t, -1, i, "the media URL names no deployment: %s", mediaURL)
+	require.Less(t, i+1, len(segments), "the media URL names no deployment: %s", mediaURL)
+
+	return segments[i+1]
+}
+
 func deploymentSeedImageProgressPort(world *bmcWorld) *adapterMock.SeedImageProgressPortMock {
 	return &adapterMock.SeedImageProgressPortMock{
-		GetFunc: func(ctx context.Context, imageID provisioning.SeedImageID, source string) (provisioning.SeedImageProgress, bool) {
+		GetFunc: func(ctx context.Context, deploymentID string) (provisioning.SeedImageProgress, bool) {
 			world.mu.Lock()
 			defer world.mu.Unlock()
 
-			progress, ok := world.mediaProgress[source]
-			if !ok || progress.ImageID != imageID {
-				return provisioning.SeedImageProgress{}, false
-			}
+			progress, ok := world.mediaProgress[deploymentID]
 
-			return progress, true
+			return progress, ok
 		},
-		GetByImageFunc: func(ctx context.Context, imageID provisioning.SeedImageID) []provisioning.SeedImageProgress {
-			world.mu.Lock()
-			defer world.mu.Unlock()
-
-			var recorded []provisioning.SeedImageProgress
-
-			for _, source := range slices.Sorted(maps.Keys(world.mediaProgress)) {
-				if world.mediaProgress[source].ImageID == imageID {
-					recorded = append(recorded, world.mediaProgress[source])
-				}
-			}
-
-			return recorded
-		},
-		ResetFunc: func(ctx context.Context, imageID provisioning.SeedImageID) {
+		ResetFunc: func(ctx context.Context, deploymentID string) {
 			world.mu.Lock()
 			defer world.mu.Unlock()
 
 			world.mediaResets++
-			world.mediaProgressID = imageID
-			world.mediaProgress = map[string]provisioning.SeedImageProgress{}
+
+			delete(world.mediaProgress, deploymentID)
 		},
 	}
 }

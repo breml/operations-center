@@ -2893,7 +2893,7 @@ func (s *serverService) BMCDumpByName(ctx context.Context, name string, addition
 }
 
 func (s *serverService) BMCAttachMediaByName(ctx context.Context, name string, media api.ServerBMCAttachMedia) error {
-	_, err := s.bmcAttachMediaByName(ctx, name, media, true)
+	_, err := s.bmcAttachMediaByName(ctx, name, media, "", true)
 
 	return err
 }
@@ -2905,7 +2905,7 @@ type bmcAttachedMedia struct {
 }
 
 // bmcAttachMediaByName skips awaiting the task monitor in the background, if wait is false.
-func (s *serverService) bmcAttachMediaByName(ctx context.Context, name string, media api.ServerBMCAttachMedia, wait bool) (bmcAttachedMedia, error) {
+func (s *serverService) bmcAttachMediaByName(ctx context.Context, name string, media api.ServerBMCAttachMedia, deploymentID string, wait bool) (bmcAttachedMedia, error) {
 	if name == "" {
 		return bmcAttachedMedia{}, fmt.Errorf("Server name cannot be empty: %w", domain.ErrOperationNotPermitted)
 	}
@@ -2973,7 +2973,7 @@ func (s *serverService) bmcAttachMediaByName(ctx context.Context, name string, m
 
 	segments := append(
 		[]string{"1.0", "provisioning", "tokens", tokenUUID.String(), "seeds", seed.Name},
-		api.TokenSeedPreparedImagePathSegments(imageType, architecture, media.Channel, fingerprintID)...,
+		api.TokenSeedPreparedImagePathSegments(imageType, architecture, media.Channel, deploymentID, fingerprintID)...,
 	)
 
 	imageURL := baseURL.JoinPath(segments...)
