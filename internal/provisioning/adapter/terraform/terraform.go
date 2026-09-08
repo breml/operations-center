@@ -149,6 +149,16 @@ func (t terraform) Init(ctx context.Context, name string, config provisioning.Cl
 		return "", nil, fmt.Errorf("Failed to read templates directory: %w", err)
 	}
 
+	meshTunnelInterfaces := make(map[string]string, len(config.Servers))
+	for _, server := range config.Servers {
+		meshTunnelInterface, err := provisioning.DetermineMeshTunnelInterface(server.OSData)
+		if err != nil {
+			return "", nil, fmt.Errorf("Server %q: %w", server.Name, err)
+		}
+
+		meshTunnelInterfaces[server.Name] = meshTunnelInterface
+	}
+
 	for _, templateFile := range templateFiles {
 		err = func() (err error) {
 			targetFilename, _ := strings.CutSuffix(filepath.Join(configDir, templateFile.Name()), ".gotmpl")
@@ -164,11 +174,6 @@ func (t terraform) Init(ctx context.Context, name string, config provisioning.Cl
 
 			switch filepath.Ext(templateFile.Name()) {
 			case ".gotmpl":
-				meshTunnelInterfaces := make(map[string]string, len(config.Servers))
-				for _, server := range config.Servers {
-					meshTunnelInterfaces[server.Name] = detectClusterInterface(server.OSData.Network)
-				}
-
 				err = tmpl.ExecuteTemplate(
 					targetFile, templateFile.Name(), map[string]any{
 						"ClusterID":            config.Cluster.ID,

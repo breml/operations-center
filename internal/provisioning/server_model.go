@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net"
 	"net/url"
+	"slices"
 	"strings"
 	"time"
 
@@ -317,6 +318,32 @@ func DetermineManagementRoleURL(osdata api.OSData) (string, error) {
 	}
 
 	return "https://" + net.JoinHostPort(ip.String(), "8443"), nil
+}
+
+// DetermineMeshTunnelInterface returns the name of the network interface to be used
+// for the internal mesh network ("tunnel.mesh.interface").
+//
+// The first interface with the role "cluster" and at least one IP address assigned
+// is returned. If no such interface is present, the interfaces with the role
+// "management" are considered as fallback.
+func DetermineMeshTunnelInterface(osdata api.OSData) (string, error) {
+	roles := []string{
+		incusosapi.SystemNetworkInterfaceRoleCluster,
+		incusosapi.SystemNetworkInterfaceRoleManagement,
+	}
+
+	for _, role := range roles {
+		interfaceNames := osdata.Network.State.GetInterfaceNamesByRole(role)
+		slices.Sort(interfaceNames)
+
+		for _, name := range interfaceNames {
+			if len(osdata.Network.State.Interfaces[name].Addresses) > 0 {
+				return name, nil
+			}
+		}
+	}
+
+	return "", fmt.Errorf(`Failed to determine the network interface with "cluster" role required for the internal mesh network`)
 }
 
 type BMCTaskMonitor struct {

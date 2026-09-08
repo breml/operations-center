@@ -68,6 +68,9 @@ type clusterService struct {
 	removeServerFactoryResetWaitDelay         time.Duration
 	removeServerDeleteClusterMemberRetryDelay time.Duration
 
+	meshTunnelInterfaceDetectionTimeout    time.Duration
+	meshTunnelInterfaceDetectionRetryDelay time.Duration
+
 	clusterUpdateControlLoopMu        sync.Mutex
 	clusterUpdateControlLoopClusterMu map[string]*sync.Mutex
 
@@ -114,6 +117,18 @@ func WithRemoveServerDeleteClusterMemberRetryDelay(delay time.Duration) Option {
 	}
 }
 
+func WithMeshTunnelInterfaceDetectionTimeout(timeout time.Duration) Option {
+	return func(s *clusterService) {
+		s.meshTunnelInterfaceDetectionTimeout = timeout
+	}
+}
+
+func WithMeshTunnelInterfaceDetectionRetryDelay(delay time.Duration) Option {
+	return func(s *clusterService) {
+		s.meshTunnelInterfaceDetectionRetryDelay = delay
+	}
+}
+
 func WithWarningEmitter(warn provisioning.WarningServicePort) Option {
 	return func(s *clusterService) {
 		s.warning = warn
@@ -157,6 +172,9 @@ func New(
 
 		removeServerFactoryResetWaitDelay:         10 * time.Second,
 		removeServerDeleteClusterMemberRetryDelay: 5 * time.Second,
+
+		meshTunnelInterfaceDetectionTimeout:    2 * time.Minute,
+		meshTunnelInterfaceDetectionRetryDelay: 5 * time.Second,
 
 		clusterUpdateControlLoopClusterMu: map[string]*sync.Mutex{},
 		clusterUpdateProgress:             newClusterUpdateProgressLatch(),
@@ -475,13 +493,9 @@ func (s *clusterService) Create(ctx context.Context, newCluster provisioning.Clu
 
 	// Refresh OS Data, required for the detection of the network interface for
 	// the internal mesh.
-	for i, server := range servers {
-		osData, err := s.client.GetOSData(ctx, server)
-		if err != nil {
-			return newCluster, err
-		}
-
-		servers[i].OSData = osData
+	err = s.refreshOSDataForMeshTunnelInterface(ctx, servers)
+	if err != nil {
+		return newCluster, err
 	}
 
 	nodeSpecificConfigKeys, err := s.client.GetNodeSpecificConfigKeys(ctx, clusterEndpoint)
@@ -940,13 +954,9 @@ func (s *clusterService) AddServers(ctx context.Context, name string, serverName
 
 	// Refresh OS Data, required for the detection of the network interface for
 	// the internal mesh.
-	for i, server := range additionalServers {
-		osData, err := s.client.GetOSData(ctx, server)
-		if err != nil {
-			return fmt.Errorf("Failed to get OS data from %q: %w", server.Name, err)
-		}
-
-		additionalServers[i].OSData = osData
+	err = s.refreshOSDataForMeshTunnelInterface(ctx, additionalServers)
+	if err != nil {
+		return err
 	}
 
 	// Create local storage pool and the internal storage volumes for backup,
@@ -1699,6 +1709,53 @@ func (s *clusterService) RemoveServer(ctx context.Context, name string, removedS
 	}
 
 	return errors.Join(errs...)
+}
+
+// refreshOSDataForMeshTunnelInterface refreshes the OS data of the given servers in
+// place until every server reports a network interface usable for the internal mesh
+// network.
+func (s *clusterService) refreshOSDataForMeshTunnelInterface(ctx context.Context, servers []provisioning.Server) error {
+	ctx, cancel := context.WithTimeout(ctx, s.meshTunnelInterfaceDetectionTimeout)
+	defer cancel()
+
+	for {
+		var err error
+
+		for i, server := range servers {
+			var osData api.OSData
+
+			osData, err = s.client.GetOSData(ctx, server)
+			if err != nil {
+				err = fmt.Errorf("Failed to get OS data from %q: %w", server.Name, err)
+				break
+			}
+
+			servers[i].OSData = osData
+
+			_, err = provisioning.DetermineMeshTunnelInterface(osData)
+			if err != nil {
+				err = fmt.Errorf("Server %q: %w", server.Name, err)
+				break
+			}
+		}
+
+		if err == nil {
+			return nil
+		}
+
+		if ctx.Err() != nil {
+			return errors.Join(ctx.Err(), err)
+		}
+
+		slog.WarnContext(ctx, "Failed to determine the network interface for the internal mesh network, will retry", logger.Err(err))
+
+		select {
+		case <-ctx.Done():
+			return errors.Join(ctx.Err(), err)
+
+		case <-time.After(s.meshTunnelInterfaceDetectionRetryDelay):
+		}
+	}
 }
 
 func (s *clusterService) deleteClusterMemberWithRetry(ctx context.Context, serverName string, timeout time.Duration, incusClient provisioning.InstanceServer) error {

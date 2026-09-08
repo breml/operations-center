@@ -40,11 +40,40 @@ import (
 	"github.com/FuturFusion/operations-center/shared/api/system"
 )
 
+// defaultTestOSData is returned by the GetOSData mocks, if a test case does not
+// define its own OS data. It contains a network interface usable for the internal
+// mesh network, which is required for the terraform configuration to be rendered.
+var defaultTestOSData = api.OSData{
+	Network: incusosapi.SystemNetwork{
+		State: incusosapi.SystemNetworkState{
+			Interfaces: map[string]incusosapi.SystemNetworkInterfaceState{
+				"eth0": {
+					Addresses: []string{
+						"192.168.0.100",
+					},
+					Roles: []string{
+						incusosapi.SystemNetworkInterfaceRoleManagement,
+					},
+				},
+			},
+		},
+	},
+}
+
+func osDataOrDefault(osData api.OSData) api.OSData {
+	if reflect.DeepEqual(osData, api.OSData{}) {
+		return defaultTestOSData
+	}
+
+	return osData
+}
+
 func TestClusterService_Create(t *testing.T) {
 	config.InitTest(t, &envMock.EnvironmentMock{}, nil)
 
 	tests := []struct {
 		name                                              string
+		meshTunnelInterfaceDetectionTimeout               time.Duration
 		cluster                                           provisioning.Cluster
 		repoExistsByName                                  bool
 		repoExistsByNameErr                               error
@@ -3546,7 +3575,7 @@ func TestClusterService_Create(t *testing.T) {
 					return tc.clientJoinClusterErr
 				},
 				GetOSDataFunc: func(ctx context.Context, endpoint provisioning.Endpoint) (api.OSData, error) {
-					return tc.clientGetOSData, tc.clientGetOSDataErr
+					return osDataOrDefault(tc.clientGetOSData), tc.clientGetOSDataErr
 				},
 				GetNodeSpecificConfigKeysFunc: func(ctx context.Context, endpoint provisioning.Endpoint) (map[string]map[string]bool, error) {
 					return nil, tc.clientGetNodeSpecificConfigKeysErr
@@ -3621,6 +3650,8 @@ func TestClusterService_Create(t *testing.T) {
 				nil,
 				provisioningCluster.WithCreateRetryTimeout(0),
 				provisioningCluster.WithCreateClusterCertificateNotBeforeDelay(0),
+				provisioningCluster.WithMeshTunnelInterfaceDetectionTimeout(tc.meshTunnelInterfaceDetectionTimeout),
+				provisioningCluster.WithMeshTunnelInterfaceDetectionRetryDelay(0),
 			)
 
 			var signalHandlerCalled bool
@@ -3680,6 +3711,7 @@ func readyServerForClustering(id int64, name string) *provisioning.Server {
 func TestClusterService_AddServers(t *testing.T) {
 	tests := []struct {
 		name                                  string
+		meshTunnelInterfaceDetectionTimeout   time.Duration
 		argServerNames                        []string
 		argSkipPostJoinOperations             bool
 		argCopyServicesConfig                 bool
@@ -3708,6 +3740,7 @@ func TestClusterService_AddServers(t *testing.T) {
 		clientGetClusterJoinTokenErr          error
 		clientJoinClusterErr                  error
 		clientGetOSData                       api.OSData
+		clientGetOSDataQueue                  []queue.Item[api.OSData]
 		clientGetOSDataErr                    error
 		clientSetServerConfigErr              error
 		serverSvcUpdateErr                    error
@@ -3842,6 +3875,294 @@ func TestClusterService_AddServers(t *testing.T) {
 			},
 
 			assertErr: require.NoError,
+		},
+		{
+			name:                                "success - mesh tunnel interface only available after retry",
+			meshTunnelInterfaceDetectionTimeout: time.Minute,
+			argServerNames:                      []string{"new"},
+			repoGetByName: &provisioning.Cluster{
+				Name:    "cluster",
+				Channel: "stable",
+			},
+			serverSvcGetByName: []queue.Item[*provisioning.Server]{
+				// Pre check validation.
+				{
+					Value: &provisioning.Server{
+						Name:    "new",
+						Status:  api.ServerStatusReady,
+						Channel: "stable",
+						VersionData: api.ServerVersionData{
+							NeedsUpdate:   new(false),
+							NeedsReboot:   new(false),
+							InMaintenance: new(api.NotInMaintenance),
+							OS: api.OSVersionData{
+								Name:    "os",
+								Version: "1",
+							},
+							Applications: []api.ApplicationVersionData{
+								{
+									Name:    "incus",
+									Version: "1",
+								},
+								{
+									Name:    "incus-ceph",
+									Version: "1",
+								},
+								{
+									Name:    "incus-linstor",
+									Version: "1",
+								},
+							},
+						},
+					},
+				},
+				// Before update.
+				{
+					Value: &provisioning.Server{
+						Name:    "new",
+						Status:  api.ServerStatusReady,
+						Channel: "stable",
+						VersionData: api.ServerVersionData{
+							NeedsUpdate:   new(false),
+							NeedsReboot:   new(false),
+							InMaintenance: new(api.NotInMaintenance),
+							OS: api.OSVersionData{
+								Name:    "os",
+								Version: "1",
+							},
+							Applications: []api.ApplicationVersionData{
+								{
+									Name:    "incus",
+									Version: "1",
+								},
+								{
+									Name:    "incus-ceph",
+									Version: "1",
+								},
+								{
+									Name:    "incus-linstor",
+									Version: "1",
+								},
+							},
+						},
+					},
+				},
+			},
+			serverSvcGetAllWithFilter: provisioning.Servers{
+				{
+					Name:    "one",
+					Cluster: new("cluster"),
+					VersionData: api.ServerVersionData{
+						OS: api.OSVersionData{
+							Name:    "os",
+							Version: "1",
+						},
+						Applications: []api.ApplicationVersionData{
+							{
+								Name:    "incus",
+								Version: "1",
+							},
+							{
+								Name:    "incus-ceph",
+								Version: "1",
+							},
+							{
+								Name:    "incus-linstor",
+								Version: "1",
+							},
+						},
+					},
+				},
+			},
+			incusClientGetCluster: &incusapi.Cluster{
+				MemberConfig: []incusapi.ClusterMemberConfigKey{
+					{
+						Entity: "storage-pool",
+						Name:   "local",
+						Key:    "source",
+					},
+					{
+						Entity: "network",
+						Name:   "incusbr0",
+						Key:    "nic",
+					},
+				},
+			},
+			incusClientGetStoragePool: &incusapi.StoragePool{
+				StoragePoolPut: incusapi.StoragePoolPut{
+					Config: incusapi.ConfigMap{
+						"source": "incus",
+					},
+				},
+			},
+			incusClientGetNetwork: &incusapi.Network{
+				NetworkPut: incusapi.NetworkPut{
+					Config: incusapi.ConfigMap{
+						"nic": "eth0",
+					},
+				},
+			},
+
+			clientGetOSDataQueue: []queue.Item[api.OSData]{
+				// IncusOS is still reconfiguring networking, no interface has the
+				// implicit "management"/"cluster" role assigned yet.
+				{
+					Value: api.OSData{
+						Network: incusosapi.SystemNetwork{
+							State: incusosapi.SystemNetworkState{
+								Interfaces: map[string]incusosapi.SystemNetworkInterfaceState{
+									"eth0": {},
+								},
+							},
+						},
+					},
+				},
+				{
+					Value: defaultTestOSData,
+				},
+			},
+
+			assertErr: require.NoError,
+		},
+		{
+			name:           "error - no network interface for the internal mesh network",
+			argServerNames: []string{"new"},
+			repoGetByName: &provisioning.Cluster{
+				Name:    "cluster",
+				Channel: "stable",
+			},
+			serverSvcGetByName: []queue.Item[*provisioning.Server]{
+				// Pre check validation.
+				{
+					Value: &provisioning.Server{
+						Name:    "new",
+						Status:  api.ServerStatusReady,
+						Channel: "stable",
+						VersionData: api.ServerVersionData{
+							NeedsUpdate:   new(false),
+							NeedsReboot:   new(false),
+							InMaintenance: new(api.NotInMaintenance),
+							OS: api.OSVersionData{
+								Name:    "os",
+								Version: "1",
+							},
+							Applications: []api.ApplicationVersionData{
+								{
+									Name:    "incus",
+									Version: "1",
+								},
+								{
+									Name:    "incus-ceph",
+									Version: "1",
+								},
+								{
+									Name:    "incus-linstor",
+									Version: "1",
+								},
+							},
+						},
+					},
+				},
+				// Before update.
+				{
+					Value: &provisioning.Server{
+						Name:    "new",
+						Status:  api.ServerStatusReady,
+						Channel: "stable",
+						VersionData: api.ServerVersionData{
+							NeedsUpdate:   new(false),
+							NeedsReboot:   new(false),
+							InMaintenance: new(api.NotInMaintenance),
+							OS: api.OSVersionData{
+								Name:    "os",
+								Version: "1",
+							},
+							Applications: []api.ApplicationVersionData{
+								{
+									Name:    "incus",
+									Version: "1",
+								},
+								{
+									Name:    "incus-ceph",
+									Version: "1",
+								},
+								{
+									Name:    "incus-linstor",
+									Version: "1",
+								},
+							},
+						},
+					},
+				},
+			},
+			serverSvcGetAllWithFilter: provisioning.Servers{
+				{
+					Name:    "one",
+					Cluster: new("cluster"),
+					VersionData: api.ServerVersionData{
+						OS: api.OSVersionData{
+							Name:    "os",
+							Version: "1",
+						},
+						Applications: []api.ApplicationVersionData{
+							{
+								Name:    "incus",
+								Version: "1",
+							},
+							{
+								Name:    "incus-ceph",
+								Version: "1",
+							},
+							{
+								Name:    "incus-linstor",
+								Version: "1",
+							},
+						},
+					},
+				},
+			},
+			incusClientGetCluster: &incusapi.Cluster{
+				MemberConfig: []incusapi.ClusterMemberConfigKey{
+					{
+						Entity: "storage-pool",
+						Name:   "local",
+						Key:    "source",
+					},
+					{
+						Entity: "network",
+						Name:   "incusbr0",
+						Key:    "nic",
+					},
+				},
+			},
+			incusClientGetStoragePool: &incusapi.StoragePool{
+				StoragePoolPut: incusapi.StoragePoolPut{
+					Config: incusapi.ConfigMap{
+						"source": "incus",
+					},
+				},
+			},
+			incusClientGetNetwork: &incusapi.Network{
+				NetworkPut: incusapi.NetworkPut{
+					Config: incusapi.ConfigMap{
+						"nic": "eth0",
+					},
+				},
+			},
+
+			clientGetOSData: api.OSData{
+				Network: incusosapi.SystemNetwork{
+					State: incusosapi.SystemNetworkState{
+						Interfaces: map[string]incusosapi.SystemNetworkInterfaceState{
+							"eth0": {},
+						},
+					},
+				},
+			},
+
+			assertErr: func(tt require.TestingT, err error, a ...any) {
+				require.ErrorContains(tt, err, `Server "new": Failed to determine the network interface with "cluster" role required for the internal mesh network`)
+			},
 		},
 		{
 			name:                      "success - skipPostJoinOperations",
@@ -6102,7 +6423,11 @@ func TestClusterService_AddServers(t *testing.T) {
 					return tc.clientJoinClusterErr
 				},
 				GetOSDataFunc: func(ctx context.Context, endpoint provisioning.Endpoint) (api.OSData, error) {
-					return tc.clientGetOSData, tc.clientGetOSDataErr
+					if len(tc.clientGetOSDataQueue) > 0 {
+						return queue.PopRetainLast(t, &tc.clientGetOSDataQueue)
+					}
+
+					return osDataOrDefault(tc.clientGetOSData), tc.clientGetOSDataErr
 				},
 				SetServerConfigFunc: func(ctx context.Context, endpoint provisioning.Endpoint, config map[string]string) error {
 					return tc.clientSetServerConfigErr
@@ -6130,6 +6455,8 @@ func TestClusterService_AddServers(t *testing.T) {
 				nil,
 				nil,
 				nil,
+				provisioningCluster.WithMeshTunnelInterfaceDetectionTimeout(tc.meshTunnelInterfaceDetectionTimeout),
+				provisioningCluster.WithMeshTunnelInterfaceDetectionRetryDelay(0),
 			)
 
 			// Run test
