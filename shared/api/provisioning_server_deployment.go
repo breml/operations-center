@@ -2,6 +2,7 @@ package api
 
 import (
 	"fmt"
+	"slices"
 	"time"
 )
 
@@ -255,14 +256,23 @@ func (s ServerDeploymentState) String() string {
 	return string(s)
 }
 
+// serverDeploymentTerminalStates are the states, in which no further step is
+// performed for a deployment.
+var serverDeploymentTerminalStates = []ServerDeploymentState{
+	ServerDeploymentStateCompleted,
+	ServerDeploymentStateFailed,
+	ServerDeploymentStateCancelled,
+}
+
+// ServerDeploymentTerminalStates returns the states, in which no further step is
+// performed for a deployment.
+func ServerDeploymentTerminalStates() []ServerDeploymentState {
+	return slices.Clone(serverDeploymentTerminalStates)
+}
+
 // IsTerminal reports, if no further step is performed for a deployment in this state.
 func (s ServerDeploymentState) IsTerminal() bool {
-	switch s {
-	case ServerDeploymentStateCompleted, ServerDeploymentStateFailed, ServerDeploymentStateCancelled:
-		return true
-	}
-
-	return false
+	return slices.Contains(serverDeploymentTerminalStates, s)
 }
 
 // MarshalText implements the encoding.TextMarshaler interface.
