@@ -181,7 +181,22 @@ func TestServerDatabaseActions(t *testing.T) {
 			return nil
 		},
 		GetOSDataFunc: func(ctx context.Context, endpoint provisioning.Endpoint) (api.OSData, error) {
-			return api.OSData{}, nil
+			return api.OSData{
+				Network: incusosapi.SystemNetwork{
+					State: incusosapi.SystemNetworkState{
+						Interfaces: map[string]incusosapi.SystemNetworkInterfaceState{
+							"eth0": {
+								Addresses: []string{
+									"192.168.0.100",
+								},
+								Roles: []string{
+									incusosapi.SystemNetworkInterfaceRoleManagement,
+								},
+							},
+						},
+					},
+				},
+			}, nil
 		},
 		GetNodeSpecificConfigKeysFunc: func(ctx context.Context, endpoint provisioning.Endpoint) (map[string]map[string]bool, error) {
 			return map[string]map[string]bool{}, nil
