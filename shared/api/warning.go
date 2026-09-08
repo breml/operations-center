@@ -57,6 +57,11 @@ const (
 	// WarningTypeVersionDatailsMissing indicates a warning where version details
 	// for a given update (OS or application) is missing.
 	WarningTypeVersionDatailsMissing WarningType = "Update version details missing"
+
+	// WarningTypeManagementAddressMissing indicates a warning where the network
+	// interface with the "management" role of a server does not report an IP
+	// address.
+	WarningTypeManagementAddressMissing WarningType = "Management address missing"
 )
 
 // WarningScope represents a scope for a warning.
