@@ -22,7 +22,6 @@ import (
 	svcMock "github.com/FuturFusion/operations-center/internal/provisioning/mock"
 	repoMock "github.com/FuturFusion/operations-center/internal/provisioning/repo/mock"
 	provisioningServer "github.com/FuturFusion/operations-center/internal/provisioning/server"
-	"github.com/FuturFusion/operations-center/internal/util/ptr"
 	"github.com/FuturFusion/operations-center/internal/util/testing/boom"
 	"github.com/FuturFusion/operations-center/internal/util/testing/errassert"
 	"github.com/FuturFusion/operations-center/internal/util/testing/queue"
@@ -91,16 +90,21 @@ func (s *deploymentServerStore) put(server provisioning.Server) {
 	s.servers[server.Name] = cloneDeploymentServer(server)
 }
 
-func (s *deploymentServerStore) all() provisioning.Servers {
+func (s *deploymentServerStore) namesWithActiveDeployment() []string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	servers := make(provisioning.Servers, 0, len(s.servers))
+	var names []string
+
 	for _, name := range slices.Sorted(maps.Keys(s.servers)) {
-		servers = append(servers, cloneDeploymentServer(s.servers[name]))
+		if !s.servers[name].StatusInternal.Deployment.IsActive() {
+			continue
+		}
+
+		names = append(names, name)
 	}
 
-	return servers
+	return names
 }
 
 func deploymentTestServer(name string) provisioning.Server {
@@ -1063,6 +1067,14 @@ func TestServerService_DeploymentControlLoopCandidates(t *testing.T) {
 		return server
 	}
 
+	ready := func(name string) provisioning.Server {
+		server := deploying(name)
+		server.Status = api.ServerStatusReady
+		server.StatusDetail = api.ServerStatusDetailNone
+
+		return server
+	}
+
 	tests := []struct {
 		name              string
 		serverNameFilter  *string
@@ -1084,6 +1096,13 @@ func TestServerService_DeploymentControlLoopCandidates(t *testing.T) {
 			servers: []provisioning.Server{deploying("one"), registering("two")},
 
 			wantAdvanced: []string{"one", "two"},
+			assertErr:    require.NoError,
+		},
+		{
+			name:    "success - a server, that has registered and turned ready, is still advanced",
+			servers: []provisioning.Server{ready("one")},
+
+			wantAdvanced: []string{"one"},
 			assertErr:    require.NoError,
 		},
 		{
@@ -1132,7 +1151,7 @@ func TestServerService_DeploymentControlLoopCandidates(t *testing.T) {
 			assertErr: boom.ErrorIs,
 		},
 		{
-			name:           "error - repo.GetAllWithFilter",
+			name:           "error - repo.GetAllNamesWithActiveDeployment",
 			servers:        []provisioning.Server{deploying("one")},
 			repoGetAllErrs: queue.Errs{boom.Error},
 
@@ -1170,7 +1189,7 @@ func TestServerService_DeploymentControlLoopCandidates(t *testing.T) {
 
 					return server, nil
 				},
-				GetAllWithFilterFunc: func(ctx context.Context, filter provisioning.ServerFilter) (provisioning.Servers, error) {
+				GetAllNamesWithActiveDeploymentFunc: func(ctx context.Context) ([]string, error) {
 					recordMu.Lock()
 					defer recordMu.Unlock()
 
@@ -1179,21 +1198,7 @@ func TestServerService_DeploymentControlLoopCandidates(t *testing.T) {
 						return nil, err
 					}
 
-					var matching provisioning.Servers
-
-					for _, server := range store.all() {
-						if ptr.From(filter.Status) != server.Status {
-							continue
-						}
-
-						if filter.StatusDetail != nil && ptr.From(filter.StatusDetail) != server.StatusDetail {
-							continue
-						}
-
-						matching = append(matching, server)
-					}
-
-					return matching, nil
+					return store.namesWithActiveDeployment(), nil
 				},
 				UpdateFunc: func(ctx context.Context, in provisioning.Server) error {
 					store.put(in)

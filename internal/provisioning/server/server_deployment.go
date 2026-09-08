@@ -715,7 +715,7 @@ func (s *serverService) CancelDeploymentByName(ctx context.Context, name string)
 // DeploymentControlLoop advances the automated deployment of every server
 // matching the filter and that has one in progress.
 func (s *serverService) DeploymentControlLoop(ctx context.Context, serverNameFilter *string) error {
-	servers, err := s.deploymentCandidates(ctx, serverNameFilter)
+	names, err := s.deploymentCandidates(ctx, serverNameFilter)
 	if err != nil {
 		return fmt.Errorf("Failed to get servers for the deployment control loop: %w", err)
 	}
@@ -731,13 +731,13 @@ func (s *serverService) DeploymentControlLoop(ctx context.Context, serverNameFil
 
 	slots := make(chan struct{}, config.ServerDeploymentControlLoopConcurrency)
 
-	for _, server := range servers {
+	for _, name := range names {
 		slots <- struct{}{}
 
 		wg.Go(func() {
 			defer func() { <-slots }()
 
-			err := s.runDeployment(ctx, server.Name)
+			err := s.runDeployment(ctx, name)
 			if err == nil {
 				return
 			}
@@ -745,7 +745,7 @@ func (s *serverService) DeploymentControlLoop(ctx context.Context, serverNameFil
 			errsMu.Lock()
 			defer errsMu.Unlock()
 
-			errs = append(errs, fmt.Errorf("Failed to advance the deployment of server %q: %w", server.Name, err))
+			errs = append(errs, fmt.Errorf("Failed to advance the deployment of server %q: %w", name, err))
 		})
 	}
 
@@ -754,58 +754,27 @@ func (s *serverService) DeploymentControlLoop(ctx context.Context, serverNameFil
 	return errors.Join(errs...)
 }
 
-// deploymentCandidates returns the servers, that have a deployment in progress.
-func (s *serverService) deploymentCandidates(ctx context.Context, serverNameFilter *string) (provisioning.Servers, error) {
-	if serverNameFilter != nil {
-		server, err := s.repo.GetByName(ctx, *serverNameFilter)
-		if err != nil {
-			if errors.Is(err, domain.ErrNotFound) {
-				return nil, nil
-			}
+// deploymentCandidates returns the names of the servers, that have a deployment
+// in progress.
+func (s *serverService) deploymentCandidates(ctx context.Context, serverNameFilter *string) ([]string, error) {
+	if serverNameFilter == nil {
+		return s.repo.GetAllNamesWithActiveDeployment(ctx)
+	}
 
-			return nil, err
-		}
-
-		if !server.StatusInternal.Deployment.IsActive() {
+	server, err := s.repo.GetByName(ctx, *serverNameFilter)
+	if err != nil {
+		if errors.Is(err, domain.ErrNotFound) {
 			return nil, nil
 		}
 
-		return provisioning.Servers{*server}, nil
+		return nil, err
 	}
 
-	filters := []provisioning.ServerFilter{
-		{
-			Status: new(api.ServerStatusDeploying),
-		},
-		{
-			Status:       new(api.ServerStatusPending),
-			StatusDetail: new(api.ServerStatusDetailPendingRegistering),
-		},
+	if !server.StatusInternal.Deployment.IsActive() {
+		return nil, nil
 	}
 
-	var candidates provisioning.Servers
-
-	seen := map[string]struct{}{}
-
-	for _, filter := range filters {
-		servers, err := s.repo.GetAllWithFilter(ctx, filter)
-		if err != nil {
-			return nil, err
-		}
-
-		for _, server := range servers {
-			_, ok := seen[server.Name]
-			if ok || !server.StatusInternal.Deployment.IsActive() {
-				continue
-			}
-
-			seen[server.Name] = struct{}{}
-
-			candidates = append(candidates, server)
-		}
-	}
-
-	return candidates, nil
+	return []string{server.Name}, nil
 }
 
 // runDeployment advances the deployment of a single server as far as it gets

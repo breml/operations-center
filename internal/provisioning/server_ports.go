@@ -80,6 +80,7 @@ type ServerRepo interface {
 	GetAllWithFilter(ctx context.Context, filter ServerFilter) (Servers, error)
 	GetAllNames(ctx context.Context) ([]string, error)
 	GetAllNamesWithFilter(ctx context.Context, filter ServerFilter) ([]string, error)
+	GetAllNamesWithActiveDeployment(ctx context.Context) ([]string, error)
 	GetByName(ctx context.Context, name string) (*Server, error)
 	GetByCertificate(ctx context.Context, certificatePEM string) (*Server, error)
 	GetBySystemUUID(ctx context.Context, systemUUID string) (*Server, error)
