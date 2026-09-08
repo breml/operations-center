@@ -13039,10 +13039,13 @@ paths:
                   type: string
                 - description: |-
                     Flat sequence of "<key>/<value>" pairs (architecture, type,
-                    optionally channel) followed by a filename segment, e.g.
-                    "architecture/x86_64/type/iso/file.iso" for the image the token seed
-                    resolves to, or "architecture/x86_64/type/iso/a1B2c3D4e5F6.iso" for
-                    one already generated image.
+                    optionally channel and deployment) followed by a filename segment,
+                    e.g. "architecture/x86_64/type/iso/file.iso" for the image the token
+                    seed resolves to, or "architecture/x86_64/type/iso/a1B2c3D4e5F6.iso"
+                    for one already generated image. A "deployment" pair names the
+                    automated deployment reading the image, which does not change, which
+                    image is served, it only tells the readers of one and the same image
+                    apart.
                   in: path
                   name: params
                   required: true
