@@ -182,6 +182,16 @@ func SeedImageCacheID(id uuid.UUID, name string, imageType api.ImageType, archit
 	return base64.RawURLEncoding.EncodeToString(sum[:])[:SeedImageCacheIDLength]
 }
 
+// NewSeedImageDeploymentID returns an ID, that tells one deployment reading a
+// generated image apart from every other reader of the very same image. It is
+// taken once per deployment, so a re-issued attachment addresses the media by
+// the very same URL.
+func NewSeedImageDeploymentID() string {
+	sum := sha256.Sum256([]byte(uuid.New().String()))
+
+	return base64.RawURLEncoding.EncodeToString(sum[:])[:SeedImageCacheIDLength]
+}
+
 // SeedImageFingerprintID returns the ID of a pre-seeded image generated from
 // the given fingerprint.
 //
