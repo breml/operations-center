@@ -5,23 +5,18 @@ import (
 	"io"
 )
 
-// SeedImageProgressPort records how much of a seed image the sources reading it
-// have read.
+// SeedImageProgressPort records how much of its installation media a deployment
+// has read.
 type SeedImageProgressPort interface {
 	// Track wraps content, so that the reads served from it are recorded as
-	// progress of source reading the image described by info and identified by
-	// imageID.
-	Track(ctx context.Context, imageID SeedImageID, source string, info SeedImageInfo, content io.ReadSeekCloser) io.ReadSeekCloser
+	// progress of the deployment named by deploymentID.
+	Track(ctx context.Context, deploymentID string, info SeedImageInfo, content io.ReadSeekCloser) io.ReadSeekCloser
 
-	// Get returns the progress recorded for imageID being read by source and
-	// reports whether anything has been recorded at all.
-	Get(ctx context.Context, imageID SeedImageID, source string) (SeedImageProgress, bool)
+	// Get returns the progress recorded for the deployment and reports whether
+	// anything has been recorded at all.
+	Get(ctx context.Context, deploymentID string) (SeedImageProgress, bool)
 
-	// GetByImage returns the progress recorded for imageID by every source,
-	// that has read it, ordered by source.
-	GetByImage(ctx context.Context, imageID SeedImageID) []SeedImageProgress
-
-	// Reset drops what has been recorded for imageID, no matter which source
-	// read it.
-	Reset(ctx context.Context, imageID SeedImageID)
+	// Reset drops what has been recorded for the deployment, leaving every other
+	// deployment, including the ones reading the very same image, alone.
+	Reset(ctx context.Context, deploymentID string)
 }
