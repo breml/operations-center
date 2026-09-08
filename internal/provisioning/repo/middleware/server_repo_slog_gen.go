@@ -176,6 +176,40 @@ func (_d ServerRepoWithSlog) GetAllNames(ctx context.Context) (strings []string,
 	return _d._base.GetAllNames(ctx)
 }
 
+// GetAllNamesWithActiveDeployment implements provisioning.ServerRepo.
+func (_d ServerRepoWithSlog) GetAllNamesWithActiveDeployment(ctx context.Context) (strings []string, err error) {
+	log := slog.With()
+	if slog.Default().Enabled(ctx, logger.LevelTrace) {
+		log = log.With(
+			slog.Any("ctx", ctx),
+		)
+	}
+	log.DebugContext(ctx, "=> calling GetAllNamesWithActiveDeployment")
+	defer func() {
+		log := slog.With()
+		if slog.Default().Enabled(ctx, logger.LevelTrace) {
+			log = slog.With(
+				slog.Any("strings", strings),
+				slog.Any("err", err),
+			)
+		} else {
+			if err != nil {
+				log = slog.With("err", err)
+			}
+		}
+		if err != nil {
+			if _d._isInformativeErrFunc(err) {
+				log.DebugContext(ctx, "<= method GetAllNamesWithActiveDeployment returned an informative error")
+			} else {
+				log.ErrorContext(ctx, "<= method GetAllNamesWithActiveDeployment returned an error")
+			}
+		} else {
+			log.DebugContext(ctx, "<= method GetAllNamesWithActiveDeployment finished")
+		}
+	}()
+	return _d._base.GetAllNamesWithActiveDeployment(ctx)
+}
+
 // GetAllNamesWithFilter implements provisioning.ServerRepo.
 func (_d ServerRepoWithSlog) GetAllNamesWithFilter(ctx context.Context, filter provisioning.ServerFilter) (strings []string, err error) {
 	log := slog.With()

@@ -33,6 +33,9 @@ var _ provisioning.ServerRepo = &ServerRepoMock{}
 //			GetAllNamesFunc: func(ctx context.Context) ([]string, error) {
 //				panic("mock out the GetAllNames method")
 //			},
+//			GetAllNamesWithActiveDeploymentFunc: func(ctx context.Context) ([]string, error) {
+//				panic("mock out the GetAllNamesWithActiveDeployment method")
+//			},
 //			GetAllNamesWithFilterFunc: func(ctx context.Context, filter provisioning.ServerFilter) ([]string, error) {
 //				panic("mock out the GetAllNamesWithFilter method")
 //			},
@@ -75,6 +78,9 @@ type ServerRepoMock struct {
 
 	// GetAllNamesFunc mocks the GetAllNames method.
 	GetAllNamesFunc func(ctx context.Context) ([]string, error)
+
+	// GetAllNamesWithActiveDeploymentFunc mocks the GetAllNamesWithActiveDeployment method.
+	GetAllNamesWithActiveDeploymentFunc func(ctx context.Context) ([]string, error)
 
 	// GetAllNamesWithFilterFunc mocks the GetAllNamesWithFilter method.
 	GetAllNamesWithFilterFunc func(ctx context.Context, filter provisioning.ServerFilter) ([]string, error)
@@ -123,6 +129,11 @@ type ServerRepoMock struct {
 		}
 		// GetAllNames holds details about calls to the GetAllNames method.
 		GetAllNames []struct {
+			// Ctx is the ctx argument value.
+			Ctx context.Context
+		}
+		// GetAllNamesWithActiveDeployment holds details about calls to the GetAllNamesWithActiveDeployment method.
+		GetAllNamesWithActiveDeployment []struct {
 			// Ctx is the ctx argument value.
 			Ctx context.Context
 		}
@@ -185,18 +196,19 @@ type ServerRepoMock struct {
 			Server provisioning.Server
 		}
 	}
-	lockCreate                sync.RWMutex
-	lockDeleteByName          sync.RWMutex
-	lockGetAll                sync.RWMutex
-	lockGetAllNames           sync.RWMutex
-	lockGetAllNamesWithFilter sync.RWMutex
-	lockGetAllWithFilter      sync.RWMutex
-	lockGetByCertificate      sync.RWMutex
-	lockGetByMachineID        sync.RWMutex
-	lockGetByName             sync.RWMutex
-	lockGetBySystemUUID       sync.RWMutex
-	lockRename                sync.RWMutex
-	lockUpdate                sync.RWMutex
+	lockCreate                          sync.RWMutex
+	lockDeleteByName                    sync.RWMutex
+	lockGetAll                          sync.RWMutex
+	lockGetAllNames                     sync.RWMutex
+	lockGetAllNamesWithActiveDeployment sync.RWMutex
+	lockGetAllNamesWithFilter           sync.RWMutex
+	lockGetAllWithFilter                sync.RWMutex
+	lockGetByCertificate                sync.RWMutex
+	lockGetByMachineID                  sync.RWMutex
+	lockGetByName                       sync.RWMutex
+	lockGetBySystemUUID                 sync.RWMutex
+	lockRename                          sync.RWMutex
+	lockUpdate                          sync.RWMutex
 }
 
 // Create calls CreateFunc.
@@ -332,6 +344,38 @@ func (mock *ServerRepoMock) GetAllNamesCalls() []struct {
 	mock.lockGetAllNames.RLock()
 	calls = mock.calls.GetAllNames
 	mock.lockGetAllNames.RUnlock()
+	return calls
+}
+
+// GetAllNamesWithActiveDeployment calls GetAllNamesWithActiveDeploymentFunc.
+func (mock *ServerRepoMock) GetAllNamesWithActiveDeployment(ctx context.Context) ([]string, error) {
+	if mock.GetAllNamesWithActiveDeploymentFunc == nil {
+		panic("ServerRepoMock.GetAllNamesWithActiveDeploymentFunc: method is nil but ServerRepo.GetAllNamesWithActiveDeployment was just called")
+	}
+	callInfo := struct {
+		Ctx context.Context
+	}{
+		Ctx: ctx,
+	}
+	mock.lockGetAllNamesWithActiveDeployment.Lock()
+	mock.calls.GetAllNamesWithActiveDeployment = append(mock.calls.GetAllNamesWithActiveDeployment, callInfo)
+	mock.lockGetAllNamesWithActiveDeployment.Unlock()
+	return mock.GetAllNamesWithActiveDeploymentFunc(ctx)
+}
+
+// GetAllNamesWithActiveDeploymentCalls gets all the calls that were made to GetAllNamesWithActiveDeployment.
+// Check the length with:
+//
+//	len(mockedServerRepo.GetAllNamesWithActiveDeploymentCalls())
+func (mock *ServerRepoMock) GetAllNamesWithActiveDeploymentCalls() []struct {
+	Ctx context.Context
+} {
+	var calls []struct {
+		Ctx context.Context
+	}
+	mock.lockGetAllNamesWithActiveDeployment.RLock()
+	calls = mock.calls.GetAllNamesWithActiveDeployment
+	mock.lockGetAllNamesWithActiveDeployment.RUnlock()
 	return calls
 }
 
