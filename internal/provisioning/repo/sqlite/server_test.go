@@ -361,6 +361,81 @@ func TestServerDatabaseActions(t *testing.T) {
 	require.Error(t, err)
 }
 
+// TestServerDatabaseActions_namesWithActiveDeployment asserts, that the servers
+// with a deployment to advance are found from the deployment record alone: a
+// server, that has registered itself, owns its status again while its deployment
+// is still finalizing, so no status tells them apart.
+func TestServerDatabaseActions_namesWithActiveDeployment(t *testing.T) {
+	ctx := context.Background()
+
+	tmpDir := t.TempDir()
+	db, err := dbdriver.Open(tmpDir)
+	require.NoError(t, err)
+
+	t.Cleanup(func() {
+		err = db.Close()
+		require.NoError(t, err)
+	})
+
+	_, err = dbschema.Ensure(ctx, db, tmpDir)
+	require.NoError(t, err)
+
+	tx := transaction.Enable(db)
+	entities.PreparedStmts, err = entities.PrepareStmts(tx, false)
+	require.NoError(t, err)
+
+	server := sqlite.NewServer(tx)
+
+	withDeployment := func(name string, status api.ServerStatus, state api.ServerDeploymentState) provisioning.Server {
+		srv := provisioning.Server{
+			Name:    name,
+			Status:  status,
+			Channel: "stable",
+		}
+
+		if state != "" {
+			srv.StatusInternal.Deployment = &provisioning.ServerDeployment{
+				State:   state,
+				Request: provisioning.ServerDeploymentRequest{ImageType: api.ImageTypeISO},
+			}
+		}
+
+		return srv
+	}
+
+	servers := []provisioning.Server{
+		withDeployment("deploying", api.ServerStatusDeploying, api.ServerDeploymentStateWaitInstall),
+		withDeployment("registering", api.ServerStatusPending, api.ServerDeploymentStateWaitRegistration),
+		withDeployment("ready", api.ServerStatusReady, api.ServerDeploymentStateCleanup),
+		withDeployment("completed", api.ServerStatusReady, api.ServerDeploymentStateCompleted),
+		withDeployment("failed", api.ServerStatusUnregistered, api.ServerDeploymentStateFailed),
+		withDeployment("cancelled", api.ServerStatusUnregistered, api.ServerDeploymentStateCancelled),
+		withDeployment("never deployed", api.ServerStatusUnregistered, ""),
+	}
+
+	for _, srv := range servers {
+		_, err = server.Create(ctx, srv)
+		require.NoError(t, err)
+	}
+
+	names, err := server.GetAllNamesWithActiveDeployment(ctx)
+	require.NoError(t, err)
+	require.Equal(t, []string{"deploying", "ready", "registering"}, names)
+
+	// A deployment, that reaches a terminal state, is not picked up anymore.
+	done, err := server.GetByName(ctx, "ready")
+	require.NoError(t, err)
+
+	done.StatusInternal.Deployment.State = api.ServerDeploymentStateCompleted
+
+	err = server.Update(ctx, *done)
+	require.NoError(t, err)
+
+	names, err = server.GetAllNamesWithActiveDeployment(ctx)
+	require.NoError(t, err)
+	require.Equal(t, []string{"deploying", "registering"}, names)
+}
+
 func TestServerDatabaseActions_preRegisteredWithoutCertificate(t *testing.T) {
 	ctx := context.Background()
 
