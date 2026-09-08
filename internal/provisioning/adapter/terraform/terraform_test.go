@@ -26,10 +26,12 @@ func TestTerraform_Init(t *testing.T) {
 	tests := []struct {
 		name             string
 		clusterName      string
+		serverInterfaces map[string]incusosapi.SystemNetworkInterfaceState
 		terraformInitErr error
 
-		assertErr         require.ErrorAssertionFunc
-		wantTemporaryPath string
+		assertErr            require.ErrorAssertionFunc
+		wantTemporaryPath    string
+		wantNoRenderedConfig bool
 	}{
 		{
 			name:        "success",
@@ -37,6 +39,18 @@ func TestTerraform_Init(t *testing.T) {
 
 			assertErr:         require.NoError,
 			wantTemporaryPath: "foobar",
+		},
+		{
+			name:        "error - no network interface for the internal mesh network",
+			clusterName: "foobar",
+			serverInterfaces: map[string]incusosapi.SystemNetworkInterfaceState{
+				"enp5s0": {},
+			},
+
+			assertErr: func(tt require.TestingT, err error, a ...any) {
+				require.ErrorContains(tt, err, `Server "server-1": Failed to determine the network interface with "cluster" role required for the internal mesh network`)
+			},
+			wantNoRenderedConfig: true,
 		},
 		{
 			name:             "error - terraform init",
@@ -101,6 +115,16 @@ cluster_groups:
 			err = yaml.Unmarshal([]byte(applicationConfig), &applicationSeedConfig)
 			require.NoError(t, err)
 
+			serverInterfaces := tc.serverInterfaces
+			if serverInterfaces == nil {
+				serverInterfaces = map[string]incusosapi.SystemNetworkInterfaceState{
+					"enp5s0": {
+						Roles:     []string{"cluster"},
+						Addresses: []string{"1.2.3.4"},
+					},
+				}
+			}
+
 			// Run tests
 			temporaryPath, cleanup, err := tf.Init(t.Context(), tc.clusterName, provisioning.ClusterProvisioningConfig{
 				Servers: []provisioning.Server{
@@ -109,12 +133,7 @@ cluster_groups:
 						OSData: api.OSData{
 							Network: incusosapi.SystemNetwork{
 								State: incusosapi.SystemNetworkState{
-									Interfaces: map[string]incusosapi.SystemNetworkInterfaceState{
-										"enp5s0": {
-											Roles:     []string{"cluster"},
-											Addresses: []string{"1.2.3.4"},
-										},
-									},
+									Interfaces: serverInterfaces,
 								},
 							},
 						},
@@ -249,6 +268,12 @@ cluster_groups:
 			fileContains(t, filepath.Join(tmpDir, "servercerts", tc.clusterName+".crt"), "cluster certificate")
 
 			clusterConfigsDir := filepath.Join(tmpDir, "cluster-configs")
+
+			if tc.wantNoRenderedConfig {
+				require.NoFileExists(t, filepath.Join(clusterConfigsDir, tc.clusterName, "data_cluster.tf"))
+				return
+			}
+
 			require.FileExists(t, filepath.Join(clusterConfigsDir, tc.clusterName, "data_cluster.tf"))
 
 			fileMatch(t, filepath.Join(clusterConfigsDir, tc.clusterName), "providers.tf")
