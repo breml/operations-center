@@ -2110,7 +2110,16 @@ func (s *serverService) PollServer(ctx context.Context, server provisioning.Serv
 
 		serverConnectionURL, err = provisioning.DetermineManagementRoleURL(osData)
 		if err != nil {
-			return err
+			serverConnectionURL = ""
+
+			s.warning.Emit(
+				ctx,
+				warning.NewWarning(
+					api.WarningTypeManagementAddressMissing,
+					scope,
+					fmt.Sprintf("Failed to determine the connection URL of the server, keeping %q: %v", server.ConnectionURL, err),
+				),
+			)
 		}
 
 		versionData, err = s.client.GetVersionData(ctx, server)
@@ -2232,7 +2241,12 @@ func (s *serverService) PollServer(ctx context.Context, server provisioning.Serv
 			server.OSData = osData
 			server.VersionData = versionData
 			server.Type = serverType
-			server.ConnectionURL = serverConnectionURL
+
+			// Empty, if the management role address could not be determined, in which
+			// case the current connection URL is kept.
+			if serverConnectionURL != "" {
+				server.ConnectionURL = serverConnectionURL
+			}
 		}
 
 		if runServerRegistrationScriptlet {
