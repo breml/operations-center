@@ -1467,10 +1467,32 @@ func (s *serverService) RestoreSystemByName(ctx context.Context, name string, cl
 			return domain.NewRetryableErr(fmt.Errorf("server operation in flight"))
 		}
 
-		callback = func(ctx context.Context, err error) {
-			if err != nil {
-				slog.ErrorContext(ctx, "Failed to restore system", slog.String("name", name), logger.Err(err))
-				s.volatileServerStates.done(ctx, name, operationRestore, err)
+		callback = func(ctx context.Context, callbackErr error) {
+			if callbackErr != nil {
+				slog.ErrorContext(ctx, "Failed to restore system", slog.String("name", name), logger.Err(callbackErr))
+				s.volatileServerStates.done(ctx, name, operationRestore, callbackErr)
+
+				// Put the server back into the restore pending state, so the rolling
+				// update control loop picks it up again and retries the restore.
+				err := transaction.Do(ctx, func(ctx context.Context) error {
+					server, err := s.GetByName(ctx, name)
+					if err != nil {
+						return fmt.Errorf("Failed to get server %q by name: %w", name, err)
+					}
+
+					if server.StatusDetail != api.ServerStatusDetailReadyRestoring {
+						return nil
+					}
+
+					server.StatusDetail = api.ServerStatusDetailNone
+					server.LastStatusUpdated = s.now()
+
+					return s.repo.Update(ctx, *server)
+				})
+				if err != nil {
+					slog.ErrorContext(ctx, "Failed to put server back in restore pending state after failed restore", slog.String("server", name), logger.Err(err))
+				}
+
 				return
 			}
 		}
@@ -2110,7 +2132,16 @@ func (s *serverService) PollServer(ctx context.Context, server provisioning.Serv
 
 		serverConnectionURL, err = provisioning.DetermineManagementRoleURL(osData)
 		if err != nil {
-			return err
+			serverConnectionURL = ""
+
+			s.warning.Emit(
+				ctx,
+				warning.NewWarning(
+					api.WarningTypeManagementAddressMissing,
+					scope,
+					fmt.Sprintf("Failed to determine the connection URL of the server, keeping %q: %v", server.ConnectionURL, err),
+				),
+			)
 		}
 
 		versionData, err = s.client.GetVersionData(ctx, server)
@@ -2232,7 +2263,12 @@ func (s *serverService) PollServer(ctx context.Context, server provisioning.Serv
 			server.OSData = osData
 			server.VersionData = versionData
 			server.Type = serverType
-			server.ConnectionURL = serverConnectionURL
+
+			// Empty, if the management role address could not be determined, in which
+			// case the current connection URL is kept.
+			if serverConnectionURL != "" {
+				server.ConnectionURL = serverConnectionURL
+			}
 		}
 
 		if runServerRegistrationScriptlet {

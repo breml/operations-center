@@ -4698,10 +4698,11 @@ func TestServerService_PollServer(t *testing.T) {
 		updateSvcGetAllWithFilter      provisioning.Updates
 		updateSvcGetAllWithFilterErr   error
 
-		assertErr              require.ErrorAssertionFunc
-		assertLog              log.MatcherFunc
-		wantServerStatusDetail *api.ServerStatusDetail
-		wantServerVersionData  *api.ServerVersionData
+		assertErr               require.ErrorAssertionFunc
+		assertLog               log.MatcherFunc
+		wantServerStatusDetail  *api.ServerStatusDetail
+		wantServerVersionData   *api.ServerVersionData
+		wantServerConnectionURL *string
 	}{
 		{
 			name: "success",
@@ -5244,16 +5245,18 @@ func TestServerService_PollServer(t *testing.T) {
 			assertLog: log.EmptyWithIgnorePattern(log.IgnorePatternDebugLines),
 		},
 		{
-			name: "error - server without ip address on management interface",
+			name: "success - server without ip address on management interface keeps its connection URL",
 			serverArg: provisioning.Server{
-				Name:    "one",
-				Status:  api.ServerStatusPending,
-				Channel: "stable",
+				Name:          "one",
+				Status:        api.ServerStatusPending,
+				Channel:       "stable",
+				ConnectionURL: "https://192.168.0.100:8443",
 			},
 			updateServerConfigArg: true,
 			repoGetByName: &provisioning.Server{
-				Name:   "one",
-				Status: api.ServerStatusPending,
+				Name:          "one",
+				Status:        api.ServerStatusPending,
+				ConnectionURL: "https://192.168.0.100:8443",
 			},
 			clientGetOSData: api.OSData{
 				Network: incusosapi.SystemNetwork{
@@ -5270,13 +5273,12 @@ func TestServerService_PollServer(t *testing.T) {
 				},
 			},
 			clientGetVersionData: api.ServerVersionData{
-				UpdateChannel: "testing", // does not match expected channel
+				UpdateChannel: "stable",
 			},
 
-			assertErr: func(tt require.TestingT, err error, a ...any) {
-				require.ErrorContains(tt, err, `Failed to determine an IP address for the network interface with "management" role`)
-			},
-			assertLog: log.EmptyWithIgnorePattern(log.IgnorePatternDebugLines),
+			assertErr:               require.NoError,
+			assertLog:               log.Contains(`Failed to determine the connection URL of the server, keeping "https://192.168.0.100:8443"`),
+			wantServerConnectionURL: new("https://192.168.0.100:8443"),
 		},
 		{
 			name: "error - client GetVersionData",
@@ -5520,6 +5522,10 @@ func TestServerService_PollServer(t *testing.T) {
 					if tc.wantServerVersionData != nil {
 						require.Equal(t, tc.wantServerVersionData.OS, server.VersionData.OS)
 						require.Equal(t, tc.wantServerVersionData.Applications, server.VersionData.Applications)
+					}
+
+					if tc.wantServerConnectionURL != nil {
+						require.Equal(t, *tc.wantServerConnectionURL, server.ConnectionURL)
 					}
 
 					return tc.repoUpdateErr
