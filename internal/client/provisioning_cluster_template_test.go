@@ -251,6 +251,219 @@ func Test_CreateClusterTemplate(t *testing.T) {
 	}
 }
 
+func Test_UpdateClusterTemplate(t *testing.T) {
+	d := daemonSetup(t)
+
+	tests := []struct {
+		name       string
+		client     client.OperationsCenterClient
+		dbSeedFunc func(t *testing.T)
+
+		tcNameArg       string
+		clusterTemplate api.ClusterTemplatePut
+
+		assertErr  require.ErrorAssertionFunc
+		assertFunc func(t *testing.T)
+	}{
+		{
+			name:   "success",
+			client: d.socketClient,
+			dbSeedFunc: func(t *testing.T) {
+				t.Helper()
+
+				_, err := entities.CreateClusterTemplate(t.Context(), d.db, provisioning.ClusterTemplate{
+					Name:        "foo",
+					Description: "description",
+				})
+				require.NoError(t, err)
+			},
+
+			tcNameArg: "foo",
+			clusterTemplate: api.ClusterTemplatePut{
+				Description:           "updated description",
+				ServiceConfigTemplate: "service: @variable@",
+				Variables: api.ClusterTemplateVariables{
+					"variable": api.ClusterTemplateVariable{
+						Description: "a variable",
+					},
+				},
+			},
+
+			assertErr: require.NoError,
+			assertFunc: func(t *testing.T) {
+				t.Helper()
+
+				clusterTemplate, err := d.socketClient.GetClusterTemplate(t.Context(), "foo")
+				require.NoError(t, err)
+				require.Equal(t, "updated description", clusterTemplate.Description)
+				require.Equal(t, "service: @variable@", clusterTemplate.ServiceConfigTemplate)
+				require.Contains(t, clusterTemplate.Variables, "variable")
+			},
+		},
+		{
+			name:       "error - not authorized",
+			client:     d.unauthorizedHTTPClient,
+			dbSeedFunc: noop,
+
+			tcNameArg: "foo",
+
+			assertErr: func(tt require.TestingT, err error, a ...any) {
+				require.ErrorIs(tt, err, domain.ErrNotAuthenticated)
+			},
+			assertFunc: noop,
+		},
+		{
+			name:       "error - not found",
+			client:     d.socketClient,
+			dbSeedFunc: noop,
+
+			tcNameArg: "unknown",
+
+			assertErr: func(tt require.TestingT, err error, a ...any) {
+				require.ErrorIs(tt, err, domain.ErrNotFound)
+			},
+			assertFunc: noop,
+		},
+		{
+			name:       "error - validation",
+			client:     d.socketClient,
+			dbSeedFunc: noop,
+
+			tcNameArg: "foo",
+			clusterTemplate: api.ClusterTemplatePut{
+				// Invalid, the variable is not used in any of the templates.
+				Variables: api.ClusterTemplateVariables{
+					"unused": api.ClusterTemplateVariable{},
+				},
+			},
+
+			assertErr:  require.Error,
+			assertFunc: noop,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			tc.dbSeedFunc(t)
+
+			err := tc.client.UpdateClusterTemplate(t.Context(), tc.tcNameArg, tc.clusterTemplate)
+
+			tc.assertErr(t, err)
+			tc.assertFunc(t)
+		})
+	}
+}
+
+func Test_RenameClusterTemplate(t *testing.T) {
+	d := daemonSetup(t)
+
+	tests := []struct {
+		name       string
+		client     client.OperationsCenterClient
+		dbSeedFunc func(t *testing.T)
+
+		tcNameArg string
+		tcNewName string
+
+		assertErr  require.ErrorAssertionFunc
+		assertFunc func(t *testing.T)
+	}{
+		{
+			name:   "success",
+			client: d.socketClient,
+			dbSeedFunc: func(t *testing.T) {
+				t.Helper()
+
+				_, err := entities.CreateClusterTemplate(t.Context(), d.db, provisioning.ClusterTemplate{
+					Name: "foo",
+				})
+				require.NoError(t, err)
+			},
+
+			tcNameArg: "foo",
+			tcNewName: "bar",
+
+			assertErr: require.NoError,
+			assertFunc: func(t *testing.T) {
+				t.Helper()
+
+				clusterTemplate, err := d.socketClient.GetClusterTemplate(t.Context(), "bar")
+				require.NoError(t, err)
+				require.Equal(t, "bar", clusterTemplate.Name)
+
+				_, err = d.socketClient.GetClusterTemplate(t.Context(), "foo")
+				require.ErrorIs(t, err, domain.ErrNotFound)
+			},
+		},
+		{
+			name:       "error - not authorized",
+			client:     d.unauthorizedHTTPClient,
+			dbSeedFunc: noop,
+
+			tcNameArg: "bar",
+			tcNewName: "baz",
+
+			assertErr: func(tt require.TestingT, err error, a ...any) {
+				require.ErrorIs(tt, err, domain.ErrNotAuthenticated)
+			},
+			assertFunc: noop,
+		},
+		{
+			name:       "error - not found",
+			client:     d.socketClient,
+			dbSeedFunc: noop,
+
+			tcNameArg: "unknown",
+			tcNewName: "baz",
+
+			assertErr: func(tt require.TestingT, err error, a ...any) {
+				require.ErrorIs(tt, err, domain.ErrNotFound)
+			},
+			assertFunc: noop,
+		},
+		{
+			name:       "error - new name is empty",
+			client:     d.socketClient,
+			dbSeedFunc: noop,
+
+			tcNameArg: "bar",
+			tcNewName: "",
+
+			assertErr:  require.Error,
+			assertFunc: noop,
+		},
+		{
+			name:   "error - conflict",
+			client: d.socketClient,
+			dbSeedFunc: func(t *testing.T) {
+				t.Helper()
+
+				_, err := entities.CreateClusterTemplate(t.Context(), d.db, provisioning.ClusterTemplate{
+					Name: "conflicting",
+				})
+				require.NoError(t, err)
+			},
+
+			tcNameArg: "bar",
+			tcNewName: "conflicting", // already exists
+
+			assertErr:  require.Error,
+			assertFunc: noop,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			tc.dbSeedFunc(t)
+
+			err := tc.client.RenameClusterTemplate(t.Context(), tc.tcNameArg, tc.tcNewName)
+
+			tc.assertErr(t, err)
+			tc.assertFunc(t)
+		})
+	}
+}
+
 func Test_DeleteClusterTemplate(t *testing.T) {
 	d := daemonSetup(t)
 
