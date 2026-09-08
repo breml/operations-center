@@ -28,11 +28,14 @@ apt install -y \
   aspell-en \
   direnv \
   docker.io \
+  dosfstools \
+  efitools \
   fish \
   goreleaser \
   jq \
   kpartx \
   less \
+  mtools \
   locales \
   locales-all \
   man \
@@ -41,6 +44,7 @@ apt install -y \
   ripgrep \
   sqlite3 \
   sudo \
+  systemd-boot-efi \
   tofu \
   unzip \
   vim \
