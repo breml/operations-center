@@ -739,3 +739,115 @@ func TestDetermineManagementRoleURL(t *testing.T) {
 		})
 	}
 }
+
+func TestDetermineMeshTunnelInterface(t *testing.T) {
+	tests := []struct {
+		name string
+		in   api.OSData
+
+		assertErr require.ErrorAssertionFunc
+		want      string
+	}{
+		{
+			name: "success - cluster role",
+			in: api.OSData{
+				Network: incusosapi.SystemNetwork{
+					State: incusosapi.SystemNetworkState{
+						Interfaces: map[string]incusosapi.SystemNetworkInterfaceState{
+							"eth0": {
+								Addresses: []string{"192.168.1.2"},
+								Roles:     []string{incusosapi.SystemNetworkInterfaceRoleCluster},
+							},
+							"eth1": {
+								Roles: []string{incusosapi.SystemNetworkInterfaceRoleCluster},
+							},
+							"eth2": {
+								Addresses: []string{"192.168.1.3"},
+							},
+						},
+					},
+				},
+			},
+
+			assertErr: require.NoError,
+			want:      "eth0",
+		},
+		{
+			name: "success - cluster role, lowest interface name wins",
+			in: api.OSData{
+				Network: incusosapi.SystemNetwork{
+					State: incusosapi.SystemNetworkState{
+						Interfaces: map[string]incusosapi.SystemNetworkInterfaceState{
+							"eth1": {
+								Addresses: []string{"192.168.1.3"},
+								Roles:     []string{incusosapi.SystemNetworkInterfaceRoleCluster},
+							},
+							"eth0": {
+								Addresses: []string{"192.168.1.2"},
+								Roles:     []string{incusosapi.SystemNetworkInterfaceRoleCluster},
+							},
+						},
+					},
+				},
+			},
+
+			assertErr: require.NoError,
+			want:      "eth0",
+		},
+		{
+			name: "success - fallback to management role",
+			in: api.OSData{
+				Network: incusosapi.SystemNetwork{
+					State: incusosapi.SystemNetworkState{
+						Interfaces: map[string]incusosapi.SystemNetworkInterfaceState{
+							"eth0": {
+								Roles: []string{incusosapi.SystemNetworkInterfaceRoleCluster},
+							},
+							"eth1": {
+								Addresses: []string{"192.168.1.3"},
+								Roles:     []string{incusosapi.SystemNetworkInterfaceRoleManagement},
+							},
+						},
+					},
+				},
+			},
+
+			assertErr: require.NoError,
+			want:      "eth1",
+		},
+		{
+			name: "error - empty system network state",
+			in:   api.OSData{},
+
+			assertErr: require.Error,
+		},
+		{
+			name: "error - interface with cluster role, but without address",
+			in: api.OSData{
+				Network: incusosapi.SystemNetwork{
+					State: incusosapi.SystemNetworkState{
+						Interfaces: map[string]incusosapi.SystemNetworkInterfaceState{
+							"eth0": {
+								Roles: []string{incusosapi.SystemNetworkInterfaceRoleCluster},
+							},
+							"eth1": {
+								Addresses: []string{"192.168.1.3"},
+							},
+						},
+					},
+				},
+			},
+
+			assertErr: require.Error,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := provisioning.DetermineMeshTunnelInterface(tc.in)
+
+			tc.assertErr(t, err)
+			require.Equal(t, tc.want, got)
+		})
+	}
+}
