@@ -488,8 +488,7 @@ type ExprServerDeployment struct {
 	SecureBootPending      bool                            `json:"secure_boot_pending" expr:"secure_boot_pending"`
 	SecureBootAttempted    bool                            `json:"secure_boot_attempted" expr:"secure_boot_attempted"`
 	MediaURL               string                          `json:"media_url" expr:"media_url"`
-	ImageCacheID           string                          `json:"image_cache_id" expr:"image_cache_id"`
-	ImageFingerprintID     string                          `json:"image_fingerprint_id" expr:"image_fingerprint_id"`
+	ImageDeploymentID      string                          `json:"image_deployment_id" expr:"image_deployment_id"`
 	BIOSTaskMonitor        string                          `json:"bios_task_monitor" expr:"bios_task_monitor"`
 	FallbackAttempts       int                             `json:"fallback_attempts" expr:"fallback_attempts"`
 	MediaBytesRead         int64                           `json:"media_bytes_read" expr:"media_bytes_read"`
@@ -1103,8 +1102,7 @@ func ToExprServerDeployment(s ServerDeployment) ExprServerDeployment {
 		SecureBootPending:      s.SecureBootPending,
 		SecureBootAttempted:    s.SecureBootAttempted,
 		MediaURL:               s.MediaURL,
-		ImageCacheID:           s.ImageCacheID,
-		ImageFingerprintID:     s.ImageFingerprintID,
+		ImageDeploymentID:      s.ImageDeploymentID,
 		BIOSTaskMonitor:        s.BIOSTaskMonitor,
 		FallbackAttempts:       s.FallbackAttempts,
 		MediaBytesRead:         s.MediaBytesRead,

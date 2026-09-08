@@ -41,13 +41,12 @@ func NewSeedImageProgressPortWithSlog(base provisioning.SeedImageProgressPort, o
 }
 
 // Get implements provisioning.SeedImageProgressPort.
-func (_d SeedImageProgressPortWithSlog) Get(ctx context.Context, imageID provisioning.SeedImageID, source string) (seedImageProgress provisioning.SeedImageProgress, b bool) {
+func (_d SeedImageProgressPortWithSlog) Get(ctx context.Context, deploymentID string) (seedImageProgress provisioning.SeedImageProgress, b bool) {
 	log := slog.With()
 	if slog.Default().Enabled(ctx, logger.LevelTrace) {
 		log = log.With(
 			slog.Any("ctx", ctx),
-			slog.Any("imageID", imageID),
-			slog.String("source", source),
+			slog.String("deploymentID", deploymentID),
 		)
 	}
 	log.DebugContext(ctx, "=> calling Get")
@@ -62,39 +61,16 @@ func (_d SeedImageProgressPortWithSlog) Get(ctx context.Context, imageID provisi
 		}
 		log.DebugContext(ctx, "<= method Get finished")
 	}()
-	return _d._base.Get(ctx, imageID, source)
-}
-
-// GetByImage implements provisioning.SeedImageProgressPort.
-func (_d SeedImageProgressPortWithSlog) GetByImage(ctx context.Context, imageID provisioning.SeedImageID) (seedImageProgresss []provisioning.SeedImageProgress) {
-	log := slog.With()
-	if slog.Default().Enabled(ctx, logger.LevelTrace) {
-		log = log.With(
-			slog.Any("ctx", ctx),
-			slog.Any("imageID", imageID),
-		)
-	}
-	log.DebugContext(ctx, "=> calling GetByImage")
-	defer func() {
-		log := slog.With()
-		if slog.Default().Enabled(ctx, logger.LevelTrace) {
-			log = slog.With(
-				slog.Any("seedImageProgresss", seedImageProgresss),
-			)
-		} else {
-		}
-		log.DebugContext(ctx, "<= method GetByImage finished")
-	}()
-	return _d._base.GetByImage(ctx, imageID)
+	return _d._base.Get(ctx, deploymentID)
 }
 
 // Reset implements provisioning.SeedImageProgressPort.
-func (_d SeedImageProgressPortWithSlog) Reset(ctx context.Context, imageID provisioning.SeedImageID) {
+func (_d SeedImageProgressPortWithSlog) Reset(ctx context.Context, deploymentID string) {
 	log := slog.With()
 	if slog.Default().Enabled(ctx, logger.LevelTrace) {
 		log = log.With(
 			slog.Any("ctx", ctx),
-			slog.Any("imageID", imageID),
+			slog.String("deploymentID", deploymentID),
 		)
 	}
 	log.DebugContext(ctx, "=> calling Reset")
@@ -102,17 +78,16 @@ func (_d SeedImageProgressPortWithSlog) Reset(ctx context.Context, imageID provi
 		log := slog.With()
 		log.DebugContext(ctx, "<= method Reset finished")
 	}()
-	_d._base.Reset(ctx, imageID)
+	_d._base.Reset(ctx, deploymentID)
 }
 
 // Track implements provisioning.SeedImageProgressPort.
-func (_d SeedImageProgressPortWithSlog) Track(ctx context.Context, imageID provisioning.SeedImageID, source string, info provisioning.SeedImageInfo, content io.ReadSeekCloser) (readSeekCloser io.ReadSeekCloser) {
+func (_d SeedImageProgressPortWithSlog) Track(ctx context.Context, deploymentID string, info provisioning.SeedImageInfo, content io.ReadSeekCloser) (readSeekCloser io.ReadSeekCloser) {
 	log := slog.With()
 	if slog.Default().Enabled(ctx, logger.LevelTrace) {
 		log = log.With(
 			slog.Any("ctx", ctx),
-			slog.Any("imageID", imageID),
-			slog.String("source", source),
+			slog.String("deploymentID", deploymentID),
 			slog.Any("info", info),
 			slog.Any("content", content),
 		)
@@ -128,5 +103,5 @@ func (_d SeedImageProgressPortWithSlog) Track(ctx context.Context, imageID provi
 		}
 		log.DebugContext(ctx, "<= method Track finished")
 	}()
-	return _d._base.Track(ctx, imageID, source, info, content)
+	return _d._base.Track(ctx, deploymentID, info, content)
 }
