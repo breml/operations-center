@@ -508,3 +508,24 @@ func clusterUpdateStatesFromLog(t *testing.T, logOutput string) []string {
 
 	return dedupe(states)
 }
+
+func (w *serverWorld) releaseWithErr(ctx context.Context, versionData api.ServerVersionData, err error) {
+	w.mu.Lock()
+
+	if len(w.pending) == 0 {
+		w.mu.Unlock()
+		return
+	}
+
+	transition := w.pending[0]
+	w.pending = w.pending[1:]
+
+	w.versionData[transition.server] = versionData
+	w.rebooting[transition.server] = transition.rebooting
+
+	w.mu.Unlock()
+
+	if transition.callback != nil {
+		transition.callback(ctx, err)
+	}
+}
