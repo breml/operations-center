@@ -118,7 +118,7 @@ func (i *queryHandler) querysGet(r *http.Request) response.Response {
 			return response.SmartError(err)
 		}
 
-		filter.ProjectIncludeNull = parentIncludeNull
+		filter.ParentIncludeNull = parentIncludeNull
 	}
 
 	if r.URL.Query().Get("filter") != "" {
