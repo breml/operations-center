@@ -132,9 +132,10 @@ func deploymentTestBMCData(virtualMedia ...api.BMCVirtualMedia) api.BMCData {
 }
 
 var (
-	deploymentTestOpticalMedia = api.BMCVirtualMedia{ID: "system:1", MediaTypes: []string{"CD", "DVD"}}
-	deploymentTestUSBMedia     = api.BMCVirtualMedia{ID: "manager:1", MediaTypes: []string{"USBStick"}}
-	deploymentTestUntypedMedia = api.BMCVirtualMedia{ID: "manager:2"}
+	deploymentTestOpticalMedia   = api.BMCVirtualMedia{ID: "system:1", MediaTypes: []string{"CD", "DVD"}}
+	deploymentTestUSBMedia       = api.BMCVirtualMedia{ID: "manager:1", MediaTypes: []string{"USBStick"}}
+	deploymentTestUntypedMedia   = api.BMCVirtualMedia{ID: "manager:2"}
+	deploymentTestUploadingMedia = api.BMCVirtualMedia{ID: "system:1", MediaTypes: []string{"CD", "DVD"}, TransferMethod: "Upload"}
 )
 
 func TestServerService_DeployByName(t *testing.T) {
@@ -416,6 +417,82 @@ func TestServerService_DeployByName(t *testing.T) {
 					VirtualMediaID: "system:1",
 					Force:          true,
 				},
+				MediaBytesRead: -1,
+				StartedAt:      deploymentTestDate,
+				StateEnteredAt: deploymentTestDate,
+				History:        []api.ServerDeploymentStep{},
+			},
+			wantStatus: api.ServerStatusDeploying,
+			assertErr:  require.NoError,
+		},
+		{
+			name:                    "success - a seed without force reboot picks the streaming device",
+			nameArg:                 "one",
+			requestArg:              provisioning.ServerDeploymentRequest{TokenUUID: tokenUUID, Seed: "default", ImageType: api.ImageTypeISO, Architecture: images.UpdateFileArchitecture64BitX86, Force: true},
+			operationsCenterAddress: deploymentTestOperationsCenterAddress,
+			server:                  new(deploymentTestServer("one")),
+			bmcGetData: deploymentTestBMCData(
+				deploymentTestUploadingMedia,
+				api.BMCVirtualMedia{ID: "manager:1", MediaTypes: []string{"CD", "DVD"}},
+			),
+			tokenSvcGetByUUID:   validToken,
+			tokenSvcGetSeed:     &provisioning.TokenSeed{Token: tokenUUID, Name: "default", Public: true},
+			withBIOSProfilePort: true,
+			biosProfileResolve:  &provisioning.BIOSProfileResolution{},
+
+			wantDeployment: &provisioning.ServerDeployment{
+				State: api.ServerDeploymentStateRefreshBMCData,
+				Request: provisioning.ServerDeploymentRequest{
+					TokenUUID:      tokenUUID,
+					Seed:           "default",
+					ImageType:      api.ImageTypeISO,
+					Architecture:   images.UpdateFileArchitecture64BitX86,
+					VirtualMediaID: "manager:1",
+					Force:          true,
+				},
+				MediaBytesRead: -1,
+				StartedAt:      deploymentTestDate,
+				StateEnteredAt: deploymentTestDate,
+				History:        []api.ServerDeploymentStep{},
+			},
+			wantStatus: api.ServerStatusDeploying,
+			assertErr:  require.NoError,
+		},
+		{
+			name:                    "error - a seed without force reboot on a device, that uploads the media",
+			nameArg:                 "one",
+			requestArg:              provisioning.ServerDeploymentRequest{TokenUUID: tokenUUID, Seed: "default", ImageType: api.ImageTypeISO, Architecture: images.UpdateFileArchitecture64BitX86, Force: true},
+			operationsCenterAddress: deploymentTestOperationsCenterAddress,
+			server:                  new(deploymentTestServer("one")),
+			bmcGetData:              deploymentTestBMCData(deploymentTestUploadingMedia),
+			tokenSvcGetByUUID:       validToken,
+			tokenSvcGetSeed:         &provisioning.TokenSeed{Token: tokenUUID, Name: "default", Public: true},
+
+			wantStatus: api.ServerStatusUnregistered,
+			assertErr:  errassert.OperationNotPermittedErrorContains("uploads the installation media instead of streaming it"),
+		},
+		{
+			name:                    "success - a seed with force reboot takes the device, that uploads the media",
+			nameArg:                 "one",
+			requestArg:              validRequest,
+			operationsCenterAddress: deploymentTestOperationsCenterAddress,
+			server:                  new(deploymentTestServer("one")),
+			bmcGetData:              deploymentTestBMCData(deploymentTestUploadingMedia),
+			tokenSvcGetByUUID:       validToken,
+			tokenSvcGetSeed:         validSeed,
+			withBIOSProfilePort:     true,
+			biosProfileResolve:      &provisioning.BIOSProfileResolution{},
+
+			wantDeployment: &provisioning.ServerDeployment{
+				State: api.ServerDeploymentStateRefreshBMCData,
+				Request: provisioning.ServerDeploymentRequest{
+					TokenUUID:      tokenUUID,
+					Seed:           "default",
+					ImageType:      api.ImageTypeISO,
+					Architecture:   images.UpdateFileArchitecture64BitX86,
+					VirtualMediaID: "system:1",
+				},
+				ForceReboot:    true,
 				MediaBytesRead: -1,
 				StartedAt:      deploymentTestDate,
 				StateEnteredAt: deploymentTestDate,

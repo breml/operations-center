@@ -735,24 +735,6 @@ func Test_bmcWaitConditions(t *testing.T) {
 			want: false,
 		},
 		{
-			name:  "the media holds the image",
-			state: api.ServerDeploymentStateWaitMediaAttached,
-			data: api.BMCData{VirtualMedia: map[string]api.BMCVirtualMedia{
-				"system:1": {ID: "system:1", Inserted: true, Image: "https://oc.example.com:8443/one.iso"},
-			}},
-
-			want: true,
-		},
-		{
-			name:  "the media holds another image",
-			state: api.ServerDeploymentStateWaitMediaAttached,
-			data: api.BMCData{VirtualMedia: map[string]api.BMCVirtualMedia{
-				"system:1": {ID: "system:1", Inserted: true, Image: "https://oc.example.com:8443/other.iso"},
-			}},
-
-			want: false,
-		},
-		{
 			name:  "the media is ejected",
 			state: api.ServerDeploymentStateWaitMediaDetached,
 			data: api.BMCData{VirtualMedia: map[string]api.BMCVirtualMedia{
@@ -789,11 +771,63 @@ func Test_bmcWaitConditions(t *testing.T) {
 	}
 }
 
+func Test_deploymentMediaHoldsImage(t *testing.T) {
+	deployment := provisioning.ServerDeployment{
+		Request:  provisioning.ServerDeploymentRequest{VirtualMediaID: "system:1"},
+		MediaURL: "https://oc.example.com:8443/one.iso",
+	}
+
+	tests := []struct {
+		name string
+		data api.BMCData
+
+		want bool
+	}{
+		{
+			name: "the media holds the image",
+			data: api.BMCData{VirtualMedia: map[string]api.BMCVirtualMedia{
+				"system:1": {ID: "system:1", Inserted: true, Image: "https://oc.example.com:8443/one.iso"},
+			}},
+
+			want: true,
+		},
+		{
+			name: "the media holds another image",
+			data: api.BMCData{VirtualMedia: map[string]api.BMCVirtualMedia{
+				"system:1": {ID: "system:1", Inserted: true, Image: "https://oc.example.com:8443/other.iso"},
+			}},
+
+			want: false,
+		},
+		{
+			name: "nothing is inserted",
+			data: api.BMCData{VirtualMedia: map[string]api.BMCVirtualMedia{
+				"system:1": {ID: "system:1"},
+			}},
+
+			want: false,
+		},
+		{
+			name: "the media device is gone",
+			data: api.BMCData{},
+
+			want: false,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			require.Equal(t, tc.want, deploymentMediaHoldsImage(&deployment, tc.data))
+		})
+	}
+}
+
 func Test_selectVirtualMediaID(t *testing.T) {
 	tests := []struct {
-		name      string
-		data      api.BMCData
-		imageType api.ImageType
+		name             string
+		data             api.BMCData
+		imageType        api.ImageType
+		requireStreaming bool
 
 		want      string
 		assertErr require.ErrorAssertionFunc
@@ -912,11 +946,46 @@ func Test_selectVirtualMediaID(t *testing.T) {
 			want:      "manager:1",
 			assertErr: require.NoError,
 		},
+		{
+			name: "a streaming device wins over an uploading one, when the read progress is needed",
+			data: api.BMCData{VirtualMedia: map[string]api.BMCVirtualMedia{
+				"manager:1": {ID: "manager:1", MediaTypes: []string{"CD", "DVD"}},
+				"system:1":  {ID: "system:1", MediaTypes: []string{"CD", "DVD"}, TransferMethod: "Upload"},
+			}},
+			imageType:        api.ImageTypeISO,
+			requireStreaming: true,
+
+			want:      "manager:1",
+			assertErr: require.NoError,
+		},
+		{
+			name: "the uploading device of the system is preferred, when the read progress is not needed",
+			data: api.BMCData{VirtualMedia: map[string]api.BMCVirtualMedia{
+				"manager:1": {ID: "manager:1", MediaTypes: []string{"CD", "DVD"}},
+				"system:1":  {ID: "system:1", MediaTypes: []string{"CD", "DVD"}, TransferMethod: "Upload"},
+			}},
+			imageType: api.ImageTypeISO,
+
+			want:      "system:1",
+			assertErr: require.NoError,
+		},
+		{
+			name: "an uploading device is picked, when it is the only one taking the image",
+			data: api.BMCData{VirtualMedia: map[string]api.BMCVirtualMedia{
+				"manager:1": {ID: "manager:1", MediaTypes: []string{"USBStick"}},
+				"system:1":  {ID: "system:1", MediaTypes: []string{"CD", "DVD"}, TransferMethod: "Upload"},
+			}},
+			imageType:        api.ImageTypeISO,
+			requireStreaming: true,
+
+			want:      "system:1",
+			assertErr: require.NoError,
+		},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			got, err := selectVirtualMediaID(tc.data, tc.imageType)
+			got, err := selectVirtualMediaID(tc.data, tc.imageType, tc.requireStreaming)
 
 			tc.assertErr(t, err)
 			require.Equal(t, tc.want, got)
@@ -973,6 +1042,20 @@ func Test_deploymentRetryFromError(t *testing.T) {
 
 	_, ok = errors.AsType[deploymentRetryFromError](boom.Error)
 	require.False(t, ok, "a plain error carries no state to go back to")
+}
+
+func Test_deploymentFatalError(t *testing.T) {
+	err := error(deploymentFatalError{err: boom.Error})
+
+	require.Equal(t, boom.Error.Error(), err.Error(), "the sentinel reports the message of the error it carries")
+	require.ErrorIs(t, err, boom.Error, "the wrapped error stays inspectable")
+	require.False(t, domain.IsRetryableError(err), "a fatal error is never retried")
+
+	_, ok := errors.AsType[deploymentFatalError](fmt.Errorf("wrapped: %w", err))
+	require.True(t, ok, "the sentinel is found through another wrapping")
+
+	_, ok = errors.AsType[deploymentFatalError](boom.Error)
+	require.False(t, ok, "a plain error does not end the deployment")
 }
 
 // Test_deploymentStates asserts the invariants of the deployment state machine,

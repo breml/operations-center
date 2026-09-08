@@ -294,6 +294,21 @@ func (e deploymentRetryFromError) Unwrap() error {
 	return e.err
 }
 
+// deploymentFatalError ends the deployment right away, instead of being retried.
+// It is what a wait state reports, when it observes, that the condition it is
+// waiting for can never be met.
+type deploymentFatalError struct {
+	err error
+}
+
+func (e deploymentFatalError) Error() string {
+	return e.err.Error()
+}
+
+func (e deploymentFatalError) Unwrap() error {
+	return e.err
+}
+
 // deploymentNextState returns the state, the deployment enters after the step it
 // just completed, passing by a BIOS pass with nothing left to apply and the
 // secure boot enrollment, if it was requested to be skipped. The skips chain,
@@ -569,7 +584,7 @@ func (s *serverService) DeployByName(ctx context.Context, name string, request p
 		}
 
 		if request.VirtualMediaID == "" {
-			request.VirtualMediaID, err = selectVirtualMediaID(server.BMCData, request.ImageType)
+			request.VirtualMediaID, err = selectVirtualMediaID(server.BMCData, request.ImageType, !forceReboot)
 			if err != nil {
 				return fmt.Errorf("Failed to select a virtual media device of server %q: %w", name, err)
 			}
@@ -585,6 +600,10 @@ func (s *serverService) DeployByName(ctx context.Context, name string, request p
 					request.VirtualMediaID, name, request.ImageType, strings.Join(media.MediaTypes, ", "), domain.ErrOperationNotPermitted,
 				)
 			}
+		}
+
+		if !forceReboot && virtualMediaUploads(server.BMCData.VirtualMedia[request.VirtualMediaID]) {
+			return deploymentUploadedMediaError(name, request.VirtualMediaID)
 		}
 
 		resolution, err := s.resolveBIOSProfile(ctx, *server)
@@ -927,6 +946,11 @@ func (s *serverService) deploymentWait(ctx context.Context, log *slog.Logger, se
 
 	met, mutate, err := s.checkBoundedDeploymentWait(ctx, log, server, definition)
 	if err != nil {
+		fatal, ok := errors.AsType[deploymentFatalError](err)
+		if ok {
+			return false, s.failDeployment(ctx, server.Name, fatal)
+		}
+
 		// Failing to observe the condition is not failing the step, it is simply
 		// repeated on the next tick until the state times out.
 		log.WarnContext(ctx, "Failed to evaluate the deployment wait condition", logger.Err(err))
@@ -1298,7 +1322,6 @@ var bmcWaitConditions = map[api.ServerDeploymentState]func(*provisioning.ServerD
 	api.ServerDeploymentStateWaitPowerOffSecureBootSettled: deploymentPowerIsOff,
 	api.ServerDeploymentStateWaitCancel:                    deploymentCancelSettled,
 	api.ServerDeploymentStateWaitMediaCleared:              deploymentNoMediaInserted,
-	api.ServerDeploymentStateWaitMediaAttached:             deploymentMediaHoldsImage,
 	api.ServerDeploymentStateWaitMediaDetached:             deploymentMediaEjected,
 }
 
@@ -1351,6 +1374,9 @@ func (s *serverService) checkDeploymentWait(ctx context.Context, log *slog.Logge
 	}
 
 	switch deployment.State {
+	case api.ServerDeploymentStateWaitMediaAttached:
+		return s.checkDeploymentMediaAttached(ctx, server)
+
 	case api.ServerDeploymentStateWaitSecureBootSettled:
 		return s.checkDeploymentSecureBootSettled(ctx, log, server)
 
@@ -1368,6 +1394,22 @@ func (s *serverService) checkDeploymentWait(ctx context.Context, log *slog.Logge
 	}
 
 	return false, nil, fmt.Errorf("Deployment state %q is not a wait", deployment.State)
+}
+
+func (s *serverService) checkDeploymentMediaAttached(ctx context.Context, server provisioning.Server) (bool, func(*provisioning.ServerDeployment), error) {
+	deployment := server.StatusInternal.Deployment
+
+	current, err := s.deploymentBMCData(ctx, server)
+	if err != nil {
+		return false, nil, err
+	}
+
+	media, ok := current.BMCData.VirtualMedia[deployment.Request.VirtualMediaID]
+	if ok && !deployment.ForceReboot && virtualMediaUploads(media) {
+		return false, nil, deploymentFatalError{err: deploymentUploadedMediaError(server.Name, deployment.Request.VirtualMediaID)}
+	}
+
+	return deploymentMediaHoldsImage(deployment, current.BMCData), nil, nil
 }
 
 // checkDeploymentRebooted tells, whether the server has come back up after the
@@ -1601,7 +1643,7 @@ func (s *serverService) deploymentMediaProgress(ctx context.Context, server prov
 	}
 
 	media, ok := server.BMCData.VirtualMedia[deployment.Request.VirtualMediaID]
-	if ok && strings.EqualFold(media.TransferMethod, virtualMediaTransferMethodUpload) {
+	if ok && virtualMediaUploads(media) {
 		return provisioning.SeedImageProgress{}, false
 	}
 
@@ -1884,6 +1926,19 @@ var virtualMediaTypesByImageType = map[api.ImageType][]string{
 
 var virtualMediaServicePrecedence = []string{"system", "manager"}
 
+// virtualMediaUploads reports, whether a virtual media device pulls the image in
+// before the server boots, instead of streaming.
+func virtualMediaUploads(media api.BMCVirtualMedia) bool {
+	return strings.EqualFold(media.TransferMethod, virtualMediaTransferMethodUpload)
+}
+
+func deploymentUploadedMediaError(name string, virtualMediaID string) error {
+	return fmt.Errorf(
+		`Virtual media device %q of server %q uploads the installation media instead of streaming it, so its read progress can not tell, when the installation is done. Use a token seed, that sets "force_reboot", or a virtual media device, that streams: %w`,
+		virtualMediaID, name, domain.ErrOperationNotPermitted,
+	)
+}
+
 // virtualMediaAdvertisesImageType reports, whether a virtual media device says
 // itself, that it can hold an image of the given type.
 func virtualMediaAdvertisesImageType(media api.BMCVirtualMedia, imageType api.ImageType) bool {
@@ -1909,16 +1964,44 @@ func virtualMediaSupportsImageType(media api.BMCVirtualMedia, imageType api.Imag
 // attached to, preferring a device advertising support for the requested image
 // type over one advertising nothing and, among equally suitable devices, one
 // offered by the system over one offered by the manager.
-func selectVirtualMediaID(data api.BMCData, imageType api.ImageType) (string, error) {
+//
+// A deployment, that has only the read progress of the installation media to
+// tell the installation by, needs a device, that streams it.
+func selectVirtualMediaID(data api.BMCData, imageType api.ImageType, requireStreaming bool) (string, error) {
 	if len(data.VirtualMedia) == 0 {
 		return "", fmt.Errorf("The BMC reports no virtual media device: %w", domain.ErrNotFound)
 	}
 
 	ids := virtualMediaIDsByPreference(data)
 
+	if requireStreaming {
+		streaming := slices.DeleteFunc(slices.Clone(ids), func(id string) bool {
+			return virtualMediaUploads(data.VirtualMedia[id])
+		})
+
+		id, ok := selectVirtualMediaIDFrom(data, streaming, imageType)
+		if ok {
+			return id, nil
+		}
+	}
+
+	id, ok := selectVirtualMediaIDFrom(data, ids, imageType)
+	if ok {
+		return id, nil
+	}
+
+	return "", fmt.Errorf(
+		"No virtual media device of the BMC accepts a %q image, it reports %s: %w",
+		imageType, describeVirtualMediaTypes(data), domain.ErrOperationNotPermitted,
+	)
+}
+
+// selectVirtualMediaIDFrom picks the device holding an image of the given type
+// out of ids, which the caller has already brought into the order of preference.
+func selectVirtualMediaIDFrom(data api.BMCData, ids []string, imageType api.ImageType) (string, bool) {
 	for _, id := range ids {
 		if virtualMediaAdvertisesImageType(data.VirtualMedia[id], imageType) {
-			return id, nil
+			return id, true
 		}
 	}
 
@@ -1926,14 +2009,11 @@ func selectVirtualMediaID(data api.BMCData, imageType api.ImageType) (string, er
 	// device, that does not say, what it takes.
 	for _, id := range ids {
 		if len(data.VirtualMedia[id].MediaTypes) == 0 {
-			return id, nil
+			return id, true
 		}
 	}
 
-	return "", fmt.Errorf(
-		"No virtual media device of the BMC accepts a %q image, it reports %s: %w",
-		imageType, describeVirtualMediaTypes(data), domain.ErrOperationNotPermitted,
-	)
+	return "", false
 }
 
 // virtualMediaIDsByPreference returns the IDs of all virtual media devices, the

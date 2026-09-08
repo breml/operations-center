@@ -245,6 +245,38 @@ func TestServerService_DeploymentControlLoopDrivesDeploymentToATerminalState(t *
 			wantStatusDetail: api.ServerStatusDetailPendingRegistering,
 		},
 		{
+			name:       "failed - the BMC uploads the installation media, while only its read progress could tell",
+			resolution: deploymentTestResolution(),
+			trackMedia: true,
+			worldOptions: []func(*bmcWorld){
+				func(w *bmcWorld) { w.uploadTransfer = true },
+			},
+			request: func(request *provisioning.ServerDeploymentRequest) {
+				request.Force = true
+			},
+
+			wantStates: slices.Concat(
+				deploymentStatesPreparing,
+				deploymentStatesBIOSPass,
+				deploymentStatesBIOSDeferredPass,
+				deploymentStatesSecureBootOff,
+				deploymentStatesSecureBoot,
+				deploymentStatesMediaCleared,
+				deploymentStatesSecureBootSettle,
+				deploymentStatesInstall[:2],
+				[]api.ServerDeploymentState{api.ServerDeploymentStateFailed},
+			),
+			wantStatus:       api.ServerStatusUnregistered,
+			wantStatusDetail: api.ServerStatusDetailUnregisteredDeploymentFailed,
+			wantFailedState:  api.ServerDeploymentStateWaitMediaAttached,
+			wantLastError:    "uploads the installation media instead of streaming it",
+			assertWorld: func(t *testing.T, world *bmcWorld) {
+				t.Helper()
+
+				require.Equal(t, []string{"system:1"}, world.mediaInserted(), "the failed deployment leaves the installation media attached, the way every failure does")
+			},
+		},
+		{
 			name:        "success - the BMC reports no boot progress",
 			forceReboot: true,
 			resolution:  deploymentTestResolution(),
