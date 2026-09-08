@@ -2538,6 +2538,19 @@ func (s *clusterService) ClusterUpdateControlLoop(ctx context.Context, clusterNa
 			}, true)
 			if err != nil {
 				if !domain.IsRetryableError(err) {
+					s.warning.Emit(
+						ctx,
+						warning.NewWarning(
+							api.WarningTypeClusterRollingUpdateNextAction,
+							api.WarningScope{
+								Scope:      "poll_servers",
+								EntityType: "cluster",
+								Entity:     cluster.Name,
+							},
+							fmt.Sprintf("Rolling cluster update blocked, failed to refresh server state information: %v", err),
+						),
+					)
+
 					return fmt.Errorf("Failed to refresh server state information for cluster %q: %w", cluster.Name, err)
 				}
 			}

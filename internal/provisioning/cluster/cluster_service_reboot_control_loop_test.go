@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -345,4 +346,121 @@ func TestClusterService_LaunchClusterRebootRejectsSecondRun(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, api.ClusterUpdateInProgressInactive, c.UpdateStatus.InProgressStatus.InProgress)
 	require.Empty(t, c.UpdateStatus.InProgressStatus.PendingReboot)
+}
+
+func TestClusterService_ClusterRollingRebootControlLoopFailingRestore(t *testing.T) {
+	ctx, cancel := context.WithTimeout(t.Context(), asyncActionsDelay*200)
+	defer cancel()
+
+	clusterSvc, world, _ := setupRebootOnlyCluster(t, ctx, "ClusterRollingRebootFailingRestore", clusterMemberServer(t, "one"))
+
+	err := clusterSvc.LaunchClusterReboot(ctx, "clusterA")
+	require.NoError(t, err)
+
+	restoreAttempts := 0
+	terminal := ""
+	var observed []string
+
+	for range 300 {
+		c, err := clusterSvc.GetByName(ctx, "clusterA")
+		require.NoError(t, err)
+
+		if c.UpdateStatus.InProgressStatus.InProgress == api.ClusterUpdateInProgressError {
+			terminal = c.UpdateStatus.InProgressStatus.Error
+			break
+		}
+
+		if c.UpdateStatus.InProgressStatus.InProgress == api.ClusterUpdateInProgressInactive {
+			break
+		}
+
+		description := ptr.From(c.UpdateStatus.InProgressStatus.StatusDescription)
+		observed = append(observed, description)
+
+		pending := world.pendingCount()
+
+		err = clusterSvc.ClusterUpdateControlLoop(ctx, nil)
+		if !domain.IsRetryableError(err) && !errors.Is(err, domain.ErrTerminal) {
+			require.NoError(t, err)
+		}
+
+		if pending > 0 {
+			if strings.Contains(description, "restoring") {
+				restoreAttempts++
+				world.releaseWithErr(ctx, versionDataRebootOnlyEvacuated, errors.New("restore failed"))
+			} else {
+				world.release(ctx)
+			}
+		}
+
+		time.Sleep(controlLoopInterval)
+	}
+
+	t.Logf("restore attempts: %d, observed: %v", restoreAttempts, dedupe(observed))
+
+	require.NotEmpty(t, terminal, "rolling reboot did not report a terminal error, observed: %v", dedupe(observed))
+	require.GreaterOrEqual(t, restoreAttempts, 2, "restore has not been retried")
+}
+
+func TestClusterService_ClusterRollingRebootControlLoopTransientRestoreFailure(t *testing.T) {
+	ctx, cancel := context.WithTimeout(t.Context(), asyncActionsDelay*200)
+	defer cancel()
+
+	clusterSvc, world, logBuf := setupRebootOnlyCluster(t, ctx, "ClusterRollingRebootTransientRestoreFailure", clusterMemberServer(t, "one"))
+
+	err := clusterSvc.LaunchClusterReboot(ctx, "clusterA")
+	require.NoError(t, err)
+
+	restoreFailed := false
+	success := false
+	var observed []string
+
+	for range 300 {
+		c, err := clusterSvc.GetByName(ctx, "clusterA")
+		require.NoError(t, err)
+		require.Empty(t, c.UpdateStatus.InProgressStatus.Error)
+
+		if c.UpdateStatus.InProgressStatus.InProgress == api.ClusterUpdateInProgressInactive {
+			success = true
+			break
+		}
+
+		description := ptr.From(c.UpdateStatus.InProgressStatus.StatusDescription)
+		observed = append(observed, description)
+
+		pending := world.pendingCount()
+
+		err = clusterSvc.ClusterUpdateControlLoop(ctx, nil)
+		if !domain.IsRetryableError(err) {
+			require.NoError(t, err)
+		}
+
+		if pending > 0 {
+			if !restoreFailed && strings.Contains(description, "restoring") {
+				restoreFailed = true
+				world.releaseWithErr(ctx, versionDataRebootOnlyEvacuated, errors.New("restore failed"))
+			} else {
+				world.release(ctx)
+			}
+		}
+
+		time.Sleep(controlLoopInterval)
+	}
+
+	require.True(t, restoreFailed, "restore did not fail, observed: %v", dedupe(observed))
+	require.True(t, success, "rolling reboot did not complete, observed: %v", dedupe(observed))
+
+	requireProgressOnlyMovesForward(t, observed)
+
+	require.Equal(t, []string{
+		`[1/7] evacuation pending server "one"`,
+		`[2/7] evacuating server "one"`,
+		`[3/7] in maintenance, reboot pending server "one"`,
+		`[4/7] in maintenance, rebooting server "one"`,
+		`[5/7] in maintenance, restore pending server "one"`,
+		`[6/7] restoring server "one"`,
+		`[5/7] in maintenance, restore pending server "one"`,
+		`[6/7] restoring server "one"`,
+		`[7/7] post restore server "one"`,
+	}, clusterUpdateStatesFromLog(t, logBuf.String()))
 }
