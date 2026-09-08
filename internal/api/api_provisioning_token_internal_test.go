@@ -695,10 +695,15 @@ func Test_tokenHandler_tokenSeedImageGetRange(t *testing.T) {
 	}
 }
 
+// Test_tokenHandler_tokenSeedImageGet_readProgress asserts, what is recorded for
+// a deployment streaming its installation media, and that a read, that names no
+// deployment, is not recorded at all.
 func Test_tokenHandler_tokenSeedImageGet_readProgress(t *testing.T) {
 	const (
 		fingerprintID = "AAAAAAAAAAAA"
-		path          = "/" + tokenUUID + "/seeds/test/architecture/x86_64/channel/stable/type/iso/" + fingerprintID + ".iso"
+		deploymentID  = "BBBBBBBBBBBB"
+		basePath      = "/" + tokenUUID + "/seeds/test/architecture/x86_64/channel/stable"
+		path          = basePath + "/deployment/" + deploymentID + "/type/iso/" + fingerprintID + ".iso"
 		content       = "0123456789abcdefghij"
 	)
 
@@ -717,58 +722,123 @@ func Test_tokenHandler_tokenSeedImageGet_readProgress(t *testing.T) {
 	tracker := seedprogress.New()
 	server := newTokenTestServer(t, tokenService, tracker)
 
-	imageID := provisioning.SeedImageID{
-		CacheID:       provisioning.SeedImageCacheID(uuid.MustParse(tokenUUID), "test", api.ImageTypeISO, images.UpdateFileArchitecture64BitX86, "stable"),
-		FingerprintID: fingerprintID,
-	}
+	// A BMC does not necessarily read the installation media from one address
+	// only, so the reads of the deployment have to add up across them.
+	firstAddress := loopbackClient(t, "127.0.0.1")
+	secondAddress := loopbackClient(t, "127.0.0.2")
 
-	// A BMC streams the image from its own address, which is what tells the
-	// reads of several servers installing from the same image apart.
-	firstBMC := loopbackClient(t, "127.0.0.1")
-	secondBMC := loopbackClient(t, "127.0.0.2")
-
-	body, resp := doTokenRequestFullWithClient(t, firstBMC, server, http.MethodGet, path, "", nil)
+	body, resp := doTokenRequestFullWithClient(t, firstAddress, server, http.MethodGet, path, "", nil)
 	require.Equal(t, http.StatusOK, resp.statusCode)
 	require.Equal(t, content, body)
 
-	body, resp = doTokenRequestFullWithClient(t, firstBMC, server, http.MethodGet, path, "", http.Header{"Range": []string{"bytes=5-9"}})
+	body, resp = doTokenRequestFullWithClient(t, firstAddress, server, http.MethodGet, path, "", http.Header{"Range": []string{"bytes=5-9"}})
 	require.Equal(t, http.StatusPartialContent, resp.statusCode)
 	require.Equal(t, content[5:10], body)
 
-	body, resp = doTokenRequestFullWithClient(t, secondBMC, server, http.MethodGet, path, "", http.Header{"Range": []string{"bytes=10-14"}})
+	progress, ok := tracker.Get(context.Background(), deploymentID)
+	require.True(t, ok)
+	require.Equal(t, int64(len(content)), progress.Size)
+
+	require.Equal(t, int64(len(content)+5), progress.BytesServed)
+	require.Equal(t, int64(len(content)), progress.BytesCovered, "the range re-read after the full download is only covered once")
+	require.Equal(t, 2, progress.RequestCount)
+
+	require.False(t, progress.FirstRead.IsZero())
+	require.Equal(t, time.Minute, progress.IdleFor(progress.LastRead.Add(time.Minute)))
+
+	// The very same deployment, read from another address.
+	body, resp = doTokenRequestFullWithClient(t, secondAddress, server, http.MethodGet, path, "", http.Header{"Range": []string{"bytes=10-14"}})
 	require.Equal(t, http.StatusPartialContent, resp.statusCode)
 	require.Equal(t, content[10:15], body)
 
-	firstProgress, ok := tracker.Get(context.Background(), imageID, "127.0.0.1")
+	progress, ok = tracker.Get(context.Background(), deploymentID)
 	require.True(t, ok)
-	require.Equal(t, int64(len(content)), firstProgress.Size)
+	require.Equal(t, int64(len(content)+10), progress.BytesServed, "the reads of both addresses add up")
+	require.Equal(t, 3, progress.RequestCount)
 
-	require.Equal(t, int64(len(content)+5), firstProgress.BytesServed)
-	require.Equal(t, int64(len(content)), firstProgress.BytesCovered, "the range re-read after the full download is only covered once")
-	require.Equal(t, 2, firstProgress.RequestCount)
+	// A prepared image, that names no deployment, is not tracked: nothing ever
+	// asks for its progress.
+	untrackedPath := basePath + "/type/iso/" + fingerprintID + ".iso"
 
-	require.False(t, firstProgress.FirstRead.IsZero())
-	require.Equal(t, time.Minute, firstProgress.IdleFor(firstProgress.LastRead.Add(time.Minute)))
+	body, resp = doTokenRequestFullWithClient(t, firstAddress, server, http.MethodGet, untrackedPath, "", nil)
+	require.Equal(t, http.StatusOK, resp.statusCode)
+	require.Equal(t, content, body)
 
-	secondProgress, ok := tracker.Get(context.Background(), imageID, "127.0.0.2")
-	require.True(t, ok)
-	require.Equal(t, int64(5), secondProgress.BytesServed)
-	require.Equal(t, int64(5), secondProgress.BytesCovered, "a range request is attributed to the part of the image it names")
-	require.Equal(t, 1, secondProgress.RequestCount)
+	_, ok = tracker.Get(context.Background(), "")
+	require.False(t, ok)
 
 	// A download naming the token seed instead of a prepared image is served to
-	// a CLI or to the UI and is not tracked at all.
-	downloadPath := "/" + tokenUUID + "/seeds/test/architecture/x86_64/channel/stable/type/iso/file.iso"
+	// a CLI or to the UI and is not tracked either.
+	downloadPath := basePath + "/type/iso/file.iso"
 
 	body, resp = doTokenRequestFullWithClient(t, loopbackClient(t, "127.0.0.3"), server, http.MethodGet, downloadPath, "", nil)
 	require.Equal(t, http.StatusOK, resp.statusCode)
 	require.Equal(t, content, body)
 
-	_, ok = tracker.Get(context.Background(), imageID, "127.0.0.3")
+	_, ok = tracker.Get(context.Background(), "")
+	require.False(t, ok)
+}
+
+// Test_tokenHandler_tokenSeedImageGet_readProgressPerDeployment asserts, that
+// two deployments installing from the very same generated image are recorded
+// apart, even when their BMCs read from the same address, which happens as soon
+// as they sit behind one NAT.
+func Test_tokenHandler_tokenSeedImageGet_readProgressPerDeployment(t *testing.T) {
+	const (
+		fingerprintID = "AAAAAAAAAAAA"
+		firstID       = "BBBBBBBBBBBB"
+		secondID      = "CCCCCCCCCCCC"
+		basePath      = "/" + tokenUUID + "/seeds/test/architecture/x86_64/channel/stable"
+		content       = "0123456789abcdefghij"
+	)
+
+	tokenService := &provisioningMock.TokenServiceMock{
+		GetPreparedTokenSeedImageFunc: func(ctx context.Context, id uuid.UUID, name string, imageType api.ImageType, architecture images.UpdateFileArchitecture, channel string, fingerprintID string) (*provisioning.TokenImage, error) {
+			return testTokenImage(content), nil
+		},
+		GetTokenSeedByNameFunc: func(ctx context.Context, id uuid.UUID, name string) (*provisioning.TokenSeed, error) {
+			return &provisioning.TokenSeed{Public: true}, nil
+		},
+	}
+
+	tracker := seedprogress.New()
+	server := newTokenTestServer(t, tokenService, tracker)
+
+	bmc := loopbackClient(t, "127.0.0.1")
+
+	// The very same image, addressed by two deployments.
+	firstPath := basePath + "/deployment/" + firstID + "/type/iso/" + fingerprintID + ".iso"
+	secondPath := basePath + "/deployment/" + secondID + "/type/iso/" + fingerprintID + ".iso"
+
+	body, resp := doTokenRequestFullWithClient(t, bmc, server, http.MethodGet, firstPath, "", nil)
+	require.Equal(t, http.StatusOK, resp.statusCode)
+	require.Equal(t, content, body, "the deployment ID does not change, which image is served")
+
+	body, resp = doTokenRequestFullWithClient(t, bmc, server, http.MethodGet, secondPath, "", http.Header{"Range": []string{"bytes=0-4"}})
+	require.Equal(t, http.StatusPartialContent, resp.statusCode)
+	require.Equal(t, content[:5], body)
+
+	firstProgress, ok := tracker.Get(context.Background(), firstID)
+	require.True(t, ok)
+	require.Equal(t, int64(len(content)), firstProgress.BytesCovered)
+
+	secondProgress, ok := tracker.Get(context.Background(), secondID)
+	require.True(t, ok)
+	require.Equal(t, int64(5), secondProgress.BytesCovered, "the reads of one deployment are not attributed to the other")
+
+	// Dropping what one deployment read leaves the other one alone.
+	tracker.Reset(context.Background(), firstID)
+
+	_, ok = tracker.Get(context.Background(), firstID)
 	require.False(t, ok)
 
-	_, ok = tracker.Get(context.Background(), provisioning.SeedImageID{CacheID: imageID.CacheID}, "127.0.0.3")
-	require.False(t, ok)
+	_, ok = tracker.Get(context.Background(), secondID)
+	require.True(t, ok)
+
+	// A deployment ID, that is not of the shape the server produces, is refused
+	// rather than silently opening a record of its own.
+	_, resp = doTokenRequestFullWithClient(t, bmc, server, http.MethodGet, basePath+"/deployment/nope/type/iso/"+fingerprintID+".iso", "", nil)
+	require.Equal(t, http.StatusBadRequest, resp.statusCode)
 }
 
 func loopbackClient(t *testing.T, address string) *http.Client {
