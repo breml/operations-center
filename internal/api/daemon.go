@@ -25,6 +25,7 @@ import (
 	incusTLS "github.com/lxc/incus/v7/shared/tls"
 	"golang.org/x/sync/errgroup"
 
+	provisioningIncusAdapter "github.com/FuturFusion/operations-center/internal/adapter/incus"
 	"github.com/FuturFusion/operations-center/internal/api/listener"
 	config "github.com/FuturFusion/operations-center/internal/config/daemon"
 	"github.com/FuturFusion/operations-center/internal/domain"
@@ -48,7 +49,6 @@ import (
 	"github.com/FuturFusion/operations-center/internal/provisioning/adapter/bios"
 	"github.com/FuturFusion/operations-center/internal/provisioning/adapter/bmc/redfish"
 	"github.com/FuturFusion/operations-center/internal/provisioning/adapter/flasher"
-	provisioningIncusAdapter "github.com/FuturFusion/operations-center/internal/adapter/incus"
 	provisioningAdapterMiddleware "github.com/FuturFusion/operations-center/internal/provisioning/adapter/middleware"
 	"github.com/FuturFusion/operations-center/internal/provisioning/adapter/scriptlet"
 	"github.com/FuturFusion/operations-center/internal/provisioning/adapter/seedprogress"
@@ -251,7 +251,8 @@ func (d *Daemon) Start(ctx context.Context) error {
 	client := provisioningIncusAdapter.New(
 		d.clientCertificate,
 		d.clientKey,
-		d.env,
+		provisioningIncusAdapter.WithEnvironment(d.env),
+		provisioningIncusAdapter.WithSkipGetServer(true),
 	)
 
 	loader := incusScriptlet.NewLoader()
