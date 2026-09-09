@@ -175,6 +175,16 @@ var bmcBootProgressOrder = []string{
 // only reached once the firmware handed over to the operating system.
 const bmcBootProgressLateState = "OSBootStarted"
 
+// BMCBootProgressHandedOverToOS reports, if a boot progress state is one, that
+// is only reached once the firmware handed over to the operating system. A state
+// carrying no ordering information is not one of them.
+func BMCBootProgressHandedOverToOS(state string) bool {
+	index := slices.Index(bmcBootProgressOrder, state)
+	lateIndex := slices.Index(bmcBootProgressOrder, bmcBootProgressLateState)
+
+	return index >= 0 && index >= lateIndex
+}
+
 // BMCHasRebootedSince reports, if the server has rebooted since the given time,
 // by comparing a previous BMC data snapshot with the current one. Since neither
 // of the required properties is supported by every BMC, the outcome is
