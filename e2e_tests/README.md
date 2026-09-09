@@ -174,6 +174,26 @@ The test helpers (`run`, `mustRun` and friends) execute their commands with
 `bash -o pipefail`, so a command, which fails anywhere in a pipeline, fails the
 whole command.
 
+### Instance lifecycle and transient storage errors
+
+Instances are not stopped, started, removed or restarted with `mustRun` directly.
+Use `stopInstanceWithContext`, `startInstanceWithContext`,
+`removeInstanceWithContext` and `restartInstanceWithContext` instead.
+
+The helpers therefore treat the exit code as a weaker signal than the actual
+state of the instance:
+
+* `stopInstanceWithContext` tolerates a failed `incus stop`, as long as the
+  instance does not report the status `Running` anymore. The tolerated failure
+  is written to the test log.
+* `startInstanceWithContext` and `removeInstanceWithContext` retry, if the
+  output of the command matches one of the `transientStorageErrors`. Any other
+  failure is returned immediately, so genuine errors are not retried.
+
+Since a tolerated stall costs up to the 5 minute timeout of Incus, the timeouts
+of `createIncusOSInstances` and of the cleanup registered by `cleanupIncusOS`
+contain the corresponding headroom.
+
 ### Idempotent tests
 
 The existing end to end tests are designed to be run individually as well as in

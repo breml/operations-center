@@ -234,7 +234,7 @@ func waitForSuccessWithTimeout(ctx context.Context, t *testing.T, desc string, c
 
 	count := 0
 	for {
-		resp := run(t, command, args...)
+		resp := runWithContext(ctx, t, command, args...)
 		if resp.err != nil {
 			return false, resp.err
 		}
@@ -338,9 +338,10 @@ func waitAgentRunningWithContext(ctx context.Context, t *testing.T, vm string, a
 		}
 
 		t.Logf(`incus wait timeout, try restart for %s`, vm)
-		cmdResp := runWithContext(ctx, t, `incus start %s`, vm)
-		if !cmdResp.Success() {
-			t.Logf(`failed to re-start incus: %v`, cmdResp.Error())
+
+		startErr := startInstanceWithContext(ctx, t, vm)
+		if startErr != nil {
+			t.Logf(`failed to re-start incus: %v`, startErr)
 		}
 	}
 
@@ -588,9 +589,9 @@ func mustWaitInventoryReady(ctx context.Context, t *testing.T, names []string) {
 
 			count := 0
 			for {
-				resp := run(t, `../bin/operations-center.linux.%s provisioning server list -f json | jq -r -e '[ .[] | select(.name == "%s" and .server_status == "ready") ] | length == 1'`, cpuArch, name)
+				resp := runWithContext(errgrpctx, t, `../bin/operations-center.linux.%s provisioning server list -f json | jq -r -e '[ .[] | select(.name == "%s" and .server_status == "ready") ] | length == 1'`, cpuArch, name)
 				if resp.err != nil {
-					return err
+					return resp.err
 				}
 
 				if resp.Success() {
@@ -846,6 +847,147 @@ func waitInstanceStatusRunning(ctx context.Context, t *testing.T, name string, t
 	}
 }
 
+const (
+	storageRetryAttempts = 3
+	storageSettleDelay   = 10 * time.Second
+)
+
+// transientStorageErrors are fragments of error messages, which indicate a
+// transient problem of the storage backend and are therefore worth a retry.
+var transientStorageErrors = []string{
+	"zvol",
+	"failed unmounting instance",
+	"dataset is busy",
+	"device or resource busy",
+}
+
+func isTransientStorageError(resp cmdResponse) bool {
+	output := strings.ToLower(resp.Output())
+
+	for _, fragment := range transientStorageErrors {
+		if strings.Contains(output, fragment) {
+			return true
+		}
+	}
+
+	return false
+}
+
+// sleepWithContext sleeps for the given duration or until the context is done.
+func sleepWithContext(ctx context.Context, d time.Duration) error {
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+
+	case <-time.After(d):
+		return nil
+	}
+}
+
+// stopInstanceWithContext stops the given instance and verifies, that the
+// instance is actually stopped afterwards.
+func stopInstanceWithContext(ctx context.Context, t *testing.T, name string) error {
+	t.Helper()
+
+	var lastErr error
+
+	for attempt := range storageRetryAttempts {
+		resp := runWithContext(ctx, t, `incus stop %s`, name)
+		if resp.Success() {
+			return nil
+		}
+
+		lastErr = fmt.Errorf("Failed to stop instance %q: %w", name, fmtRunErr(resp))
+
+		status, err := instanceStatusWithContext(ctx, t, name)
+		if err != nil {
+			return errors.Join(lastErr, err)
+		}
+
+		if status != instanceStatusRunning {
+			t.Logf("Instance %q is in status %q, tolerating the error of stop attempt %d: %v", name, status, attempt+1, lastErr)
+
+			// Give the storage backend the chance to release the volume of the
+			// instance before it is activated again.
+			return sleepWithContext(ctx, storageSettleDelay)
+		}
+
+		if !isTransientStorageError(resp) {
+			return lastErr
+		}
+
+		t.Logf("Stop attempt %d for instance %q failed with a transient storage error: %v", attempt+1, name, lastErr)
+
+		if attempt == storageRetryAttempts-1 {
+			break
+		}
+
+		err = sleepWithContext(ctx, storageSettleDelay)
+		if err != nil {
+			return errors.Join(lastErr, err)
+		}
+	}
+
+	return fmt.Errorf("Giving up after %d attempts: %w", storageRetryAttempts, lastErr)
+}
+
+func startInstanceWithContext(ctx context.Context, t *testing.T, name string) error {
+	t.Helper()
+
+	return retryStorageCmdWithContext(ctx, t, fmt.Sprintf("start instance %q", name), `incus start %s`, name)
+}
+
+func removeInstanceWithContext(ctx context.Context, t *testing.T, name string) error {
+	t.Helper()
+
+	return retryStorageCmdWithContext(ctx, t, fmt.Sprintf("remove instance %q", name), `incus remove --force %s`, name)
+}
+
+func restartInstanceWithContext(ctx context.Context, t *testing.T, name string) error {
+	t.Helper()
+
+	err := stopInstanceWithContext(ctx, t, name)
+	if err != nil {
+		return err
+	}
+
+	return startInstanceWithContext(ctx, t, name)
+}
+
+// retryStorageCmdWithContext runs the given command and retries it, as long as
+// it fails with a transient error of the storage backend.
+func retryStorageCmdWithContext(ctx context.Context, t *testing.T, desc string, command string, args ...any) error {
+	t.Helper()
+
+	var lastErr error
+
+	for attempt := range storageRetryAttempts {
+		resp := runWithContext(ctx, t, command, args...)
+		if resp.Success() {
+			return nil
+		}
+
+		lastErr = fmt.Errorf("Failed to %s: %w", desc, fmtRunErr(resp))
+
+		if !isTransientStorageError(resp) {
+			return lastErr
+		}
+
+		t.Logf("Attempt %d to %s failed with a transient storage error: %v", attempt+1, desc, lastErr)
+
+		if attempt == storageRetryAttempts-1 {
+			break
+		}
+
+		err := sleepWithContext(ctx, storageSettleDelay)
+		if err != nil {
+			return errors.Join(lastErr, err)
+		}
+	}
+
+	return fmt.Errorf("Giving up after %d attempts: %w", storageRetryAttempts, lastErr)
+}
+
 func mustGetInstanceIPAndNames(t *testing.T, names []string) (instanceIPs []string, instanceNames []string) {
 	t.Helper()
 
@@ -980,8 +1122,10 @@ func serverPowerStateCleanup(t *testing.T, name string) func() {
 			return
 		}
 
-		// In t.Cleanup, t.Context() is already cancelled, so we need a detached context.
-		ctx, cancel := context.WithTimeout(context.Background(), strechedTimeout(2*time.Minute))
+		// In t.Cleanup, t.Context() is already cancelled, so we need a detached
+		// context. The budget accommodates the retries of
+		// startInstanceWithContext.
+		ctx, cancel := context.WithTimeout(context.Background(), strechedTimeout(5*time.Minute))
 		defer cancel()
 
 		resp := runWithContext(ctx, t, `incus list -f json | jq -r -e '[ .[] | select(.name == "%s" and .status == "Running") ] | length == 1'`, name)
@@ -992,9 +1136,9 @@ func serverPowerStateCleanup(t *testing.T, name string) func() {
 		stop := timeTrack(t, "server power state cleanup")
 		defer stop()
 
-		resp = runWithContext(ctx, t, `incus start %s`, name)
-		if !resp.Success() {
-			t.Error(resp.Error())
+		err := startInstanceWithContext(ctx, t, name)
+		if err != nil {
+			t.Error(err)
 		}
 	}
 }
