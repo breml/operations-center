@@ -128,6 +128,15 @@ func (c OperationsCenterClient) SetSystemCertificate(ctx context.Context, cfg sy
 	return nil
 }
 
+func (c OperationsCenterClient) RenewSystemCertificate(ctx context.Context) error {
+	_, err := c.DoRequest(ctx, http.MethodPost, "/system/certificate/:renew", nil, nil)
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
 func (c OperationsCenterClient) CleanSystemCache(ctx context.Context) error {
 	_, err := c.DoRequest(ctx, http.MethodPost, "/system/:clean-cache", nil, nil)
 	if err != nil {
