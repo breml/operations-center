@@ -58,6 +58,7 @@ OpenTofu
 PEM
 PFX
 PKCS
+PowerEdge
 pre
 preseed
 Redfish
@@ -74,6 +75,7 @@ sso
 starlark
 struct
 Terraform
+ThinkSystem
 TLS
 toolchain
 TPM
