@@ -51,6 +51,11 @@ const (
 	// spending a tick per simulated second.
 	deploymentIdleTick = time.Minute
 
+	// deploymentMaxMediaEjectDelay is how long a server, that has installed and
+	// waits for its media to go before it reboots, may be left waiting. It bounds
+	// the media idle period plus the granularity, at which the fake advances.
+	deploymentMaxMediaEjectDelay = 3 * time.Minute
+
 	deploymentDriveIterations = 400
 )
 
@@ -145,6 +150,9 @@ type bmcWorld struct {
 	// The knobs, that let a row model a BMC or a server behaving differently.
 	dropsMediaOnBoot    bool
 	installDuration     time.Duration
+	postDuration        time.Duration
+	bootGeneration      int
+	bootsMediaAgain     bool
 	ignorePowerOffs     int
 	biosApplyDrops      int
 	secureBootEnrolls   bool
@@ -152,6 +160,8 @@ type bmcWorld struct {
 	noLastResetTime     bool
 	uploadTransfer      bool
 	installViaMediaRead bool
+	cachesMedia         bool
+	mediaEjectDelay     time.Duration
 	mediaFromOtherHost  bool
 	registers           bool
 	registrationDelay   time.Duration
@@ -212,6 +222,13 @@ func (w *bmcWorld) detachedSinceInstall() []string {
 	defer w.mu.Unlock()
 
 	return slices.Clone(w.detachedIDs)
+}
+
+func (w *bmcWorld) mediaEjectedAfter() time.Duration {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	return w.mediaEjectDelay
 }
 
 func (w *bmcWorld) mediaInserted() []string {
@@ -290,15 +307,34 @@ func (w *bmcWorld) bootNow() {
 
 	w.lastResetTime = now
 	w.bootProgress = api.BMCBootProgress{LastState: worldBootProgressEarly, LastStateTime: now}
+	w.bootGeneration++
 
-	w.schedule(worldBootDuration, "boot progress reaches the operating system", func(ctx context.Context, w *bmcWorld) error {
+	postDuration := w.postDurationOrDefault()
+
+	generation := w.bootGeneration
+
+	w.schedule(postDuration, "boot progress reaches the operating system", func(ctx context.Context, w *bmcWorld) error {
 		w.mu.Lock()
 		defer w.mu.Unlock()
+
+		if w.bootGeneration != generation {
+			return nil
+		}
 
 		w.bootProgress = api.BMCBootProgress{LastState: worldBootProgressLate, LastStateTime: w.clock.Now()}
 
 		return nil
 	})
+}
+
+// postDurationOrDefault returns how long the server takes from a reset to the
+// hand over to the operating system. It has to be called with the lock held.
+func (w *bmcWorld) postDurationOrDefault() time.Duration {
+	if w.postDuration == 0 {
+		return worldBootDuration
+	}
+
+	return w.postDuration
 }
 
 // startInstall models booting the installation media: the installer reads the
@@ -330,6 +366,20 @@ func (w *bmcWorld) startInstall() {
 		return
 	}
 
+	// A BMC, that caches the installation media instead of streaming it to the
+	// installer, has read it out while the server boots and stays quiet for the
+	// rest of the installation.
+	if w.cachesMedia {
+		w.schedule(worldMediaReadDuration, "installation media has been read", func(ctx context.Context, w *bmcWorld) error {
+			w.mu.Lock()
+			defer w.mu.Unlock()
+
+			w.recordMediaProgress()
+
+			return nil
+		})
+	}
+
 	// A firmware, that still has something to pick up, reboots the server within
 	// the first POST cycles, long before the installation could be done.
 	if w.rebootsEarly {
@@ -352,8 +402,34 @@ func (w *bmcWorld) startInstall() {
 		w.mu.Lock()
 		defer w.mu.Unlock()
 
-		w.recordMediaProgress()
+		if !w.cachesMedia {
+			w.recordMediaProgress()
+		}
+
 		w.bootNow()
+
+		// A server, that does not fall back to the installed system on its own,
+		// boots the installation media again, where the installer refuses to run
+		// a second time, so the server never registers. Ejecting the media has
+		// the POST of that boot to come through.
+		if w.bootsMediaAgain {
+			w.schedule(w.postDurationOrDefault(), "server picked its boot device", func(ctx context.Context, w *bmcWorld) error {
+				w.mu.Lock()
+				defer w.mu.Unlock()
+
+				media, ok := w.virtualMedia[w.bootDevice]
+				if ok && media.Inserted {
+					return nil
+				}
+
+				w.scheduleRegistration()
+
+				return nil
+			})
+
+			return nil
+		}
+
 		w.scheduleRegistration()
 
 		return nil

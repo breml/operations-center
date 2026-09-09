@@ -200,68 +200,51 @@ func Test_deploymentStates_callTimeoutIsAlwaysPositive(t *testing.T) {
 	}
 }
 
-func Test_deploymentInstallRebootEndsTheWait(t *testing.T) {
-	readOut := provisioning.SeedImageProgress{
-		Size:         4 * config.ServerDeploymentMediaMinBytesRead,
-		BytesCovered: config.ServerDeploymentMediaMinBytesRead,
-	}
-
-	barelyRead := provisioning.SeedImageProgress{
-		Size:         4 * config.ServerDeploymentMediaMinBytesRead,
-		BytesCovered: config.ServerDeploymentMediaMinBytesRead - 1,
-	}
+func Test_deploymentInstallOSObserved(t *testing.T) {
+	anchored := deploymentTestNow
 
 	tests := []struct {
-		name          string
-		installingFor time.Duration
-		progress      provisioning.SeedImageProgress
-		progressKnown bool
+		name     string
+		snapshot provisioning.ServerDeploymentBMCSnapshot
+		current  api.BMCData
 
 		want bool
 	}{
 		{
-			name:          "media read out before the installation could be done",
-			installingFor: time.Minute,
-			progress:      readOut,
-			progressKnown: true,
-
-			want: true,
-		},
-		{
-			name:          "media barely read before the installation could be done",
-			installingFor: time.Minute,
-			progress:      barelyRead,
-			progressKnown: true,
+			name:     "the BMC reports no boot progress",
+			snapshot: provisioning.ServerDeploymentBMCSnapshot{Taken: anchored},
+			current:  api.BMCData{},
 
 			want: false,
 		},
 		{
-			name:          "read progress can not be told before the installation could be done",
-			installingFor: time.Minute,
-			progress:      readOut,
-			progressKnown: false,
+			name:     "the firmware is still running the power on self test",
+			snapshot: provisioning.ServerDeploymentBMCSnapshot{Taken: anchored},
+			current:  api.BMCData{ServerBootProgress: api.BMCBootProgress{LastState: "MemoryInitializationStarted", LastStateTime: anchored.Add(time.Minute)}},
 
 			want: false,
 		},
 		{
-			name:          "read progress can not be told once the installation could be done",
-			installingFor: config.ServerDeploymentMinInstallDuration,
-			progress:      provisioning.SeedImageProgress{},
-			progressKnown: false,
+			name:     "the installer is running",
+			snapshot: provisioning.ServerDeploymentBMCSnapshot{Taken: anchored},
+			current:  api.BMCData{ServerBootProgress: api.BMCBootProgress{LastState: "OSRunning", LastStateTime: anchored.Add(time.Minute)}},
 
 			want: true,
+		},
+		{
+			name:     "a BMC, that kept the state of the boot before the install wait",
+			snapshot: provisioning.ServerDeploymentBMCSnapshot{Taken: anchored},
+			current:  api.BMCData{ServerBootProgress: api.BMCBootProgress{LastState: "OSRunning", LastStateTime: anchored.Add(-time.Hour)}},
+
+			want: false,
 		},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			deployment := &provisioning.ServerDeployment{
-				StateEnteredAt: deploymentTestNow,
-			}
+			deployment := &provisioning.ServerDeployment{InstallSnapshot: tc.snapshot}
 
-			got := deploymentInstallRebootEndsTheWait(deploymentTestNow.Add(tc.installingFor), deployment, tc.progress, tc.progressKnown)
-
-			require.Equal(t, tc.want, got)
+			require.Equal(t, tc.want, deploymentInstallOSObserved(deployment, tc.current), "only a boot, that ran the installer, may let a reboot end the install wait")
 		})
 	}
 }

@@ -184,6 +184,13 @@ type ServerDeployment struct {
 	MediaBytesRead int64 `json:"media_bytes_read"`
 	MediaSize      int64 `json:"media_size"`
 
+	// InstallOSObserved records, that the BMC has reported the server past the
+	// hand over to the operating system since the install wait was anchored, so
+	// the installer has been running. It is what tells the reboot at the end of
+	// the first stage apart from the one the firmware performs within the POST
+	// cycles of the boot, that is supposed to start the installer.
+	InstallOSObserved bool `json:"install_os_observed"`
+
 	// SecureBootSnapshot and InstallSnapshot hold the reboot relevant BMC
 	// properties, as they were observed on the boot, that lets the firmware pick
 	// the enrolled certificates up, respectively on entering the install wait.

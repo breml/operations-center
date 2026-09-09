@@ -493,6 +493,7 @@ type ExprServerDeployment struct {
 	FallbackAttempts       int                             `json:"fallback_attempts" expr:"fallback_attempts"`
 	MediaBytesRead         int64                           `json:"media_bytes_read" expr:"media_bytes_read"`
 	MediaSize              int64                           `json:"media_size" expr:"media_size"`
+	InstallOSObserved      bool                            `json:"install_os_observed" expr:"install_os_observed"`
 	SecureBootSnapshot     ExprServerDeploymentBMCSnapshot `json:"secure_boot_snapshot" expr:"secure_boot_snapshot"`
 	InstallSnapshot        ExprServerDeploymentBMCSnapshot `json:"install_snapshot" expr:"install_snapshot"`
 	Retries                int                             `json:"retries" expr:"retries"`
@@ -1107,6 +1108,7 @@ func ToExprServerDeployment(s ServerDeployment) ExprServerDeployment {
 		FallbackAttempts:       s.FallbackAttempts,
 		MediaBytesRead:         s.MediaBytesRead,
 		MediaSize:              s.MediaSize,
+		InstallOSObserved:      s.InstallOSObserved,
 		SecureBootSnapshot:     ToExprServerDeploymentBMCSnapshot(s.SecureBootSnapshot),
 		InstallSnapshot:        ToExprServerDeploymentBMCSnapshot(s.InstallSnapshot),
 		Retries:                s.Retries,

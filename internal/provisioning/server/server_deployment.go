@@ -1066,7 +1066,13 @@ func (s *serverService) runDeploymentAction(ctx context.Context, log *slog.Logge
 // attachDeploymentMedia generates the installation media, attaches it and
 // registers it as the boot device for the next boot.
 func (s *serverService) attachDeploymentMedia(ctx context.Context, server provisioning.Server) (func(*provisioning.ServerDeployment), error) {
-	request := server.StatusInternal.Deployment.Request
+	deployment := server.StatusInternal.Deployment
+	request := deployment.Request
+
+	deploymentID := deployment.ImageDeploymentID
+	if deploymentID == "" {
+		deploymentID = provisioning.NewSeedImageDeploymentID()
+	}
 
 	if s.seedImageProgress != nil {
 		s.seedImageProgress.Reset(ctx, deploymentID)
@@ -1531,11 +1537,18 @@ func (s *serverService) checkDeploymentInstalled(ctx context.Context, log *slog.
 		bytesRead = progress.BytesCovered
 	}
 
+	// The installer having been running is what tells the reboot at the end of
+	// the first stage apart from the one the firmware performs to pick up, what
+	// has been staged for it, since the latter comes within the POST cycles of
+	// the very boot, that is supposed to start the installer.
+	osObserved := deployment.InstallOSObserved || deploymentInstallOSObserved(deployment, current.BMCData)
+
 	var mutate func(*provisioning.ServerDeployment)
-	if bytesRead != deployment.MediaBytesRead {
+	if bytesRead != deployment.MediaBytesRead || osObserved != deployment.InstallOSObserved {
 		mutate = func(deployment *provisioning.ServerDeployment) {
 			deployment.MediaBytesRead = bytesRead
 			deployment.MediaSize = progress.Size
+			deployment.InstallOSObserved = osObserved
 		}
 	}
 
@@ -1545,9 +1558,9 @@ func (s *serverService) checkDeploymentInstalled(ctx context.Context, log *slog.
 		// The firmware reboots the server on its own, once it has applied the
 		// staged BIOS attributes or picked the enrolled secure boot certificates
 		// up, both of which happen on the very boot, that is supposed to start
-		// the installer. Such a reboot re-anchors the detection instead of ending
-		// the wait.
-		if !deploymentInstallRebootEndsTheWait(now, deployment, progress, progressKnown) {
+		// the installer, before it ever gets to run. Such a reboot re-anchors the
+		// detection instead of ending the wait.
+		if !deploymentInstallRebootTellsTheInstallation(now, deployment, osObserved) {
 			log.InfoContext(
 				ctx, "Server rebooted before the installation could have completed, waiting for the installation",
 				slog.Bool("media_progress_known", progressKnown),
@@ -1570,6 +1583,7 @@ func (s *serverService) checkDeploymentInstalled(ctx context.Context, log *slog.
 
 		log.InfoContext(
 			ctx, "Installation completed, the BMC reports a reboot of the server",
+			slog.Bool("os_observed", osObserved),
 			slog.Bool("media_read_out", progressKnown && deploymentMediaReadOut(progress)),
 			slog.Int64("bytes_covered", progress.BytesCovered),
 			slog.Duration("installing_for", now.Sub(deployment.StateEnteredAt)),
@@ -1578,10 +1592,13 @@ func (s *serverService) checkDeploymentInstalled(ctx context.Context, log *slog.
 		return true, mutate, nil
 	}
 
-	couldBeDone := deploymentInstallCouldBeDone(now, deployment)
-
 	// 3. The BMC has read enough of the installation media and stopped reading.
-	if couldBeDone && progressKnown && deploymentMediaReadOut(progress) && deploymentMediaIdle(now, progress) {
+	//    Only a deployment, whose server does not reboot on its own, is told by
+	//    the read progress: a BMC, that caches the media instead of handing every
+	//    read through to the installer, reads it out while the server boots and
+	//    then goes quiet, which is indistinguishable from an installation, that
+	//    has been read out and is done.
+	if !deployment.ForceReboot && deploymentInstallCouldBeDone(now, deployment) && progressKnown && deploymentMediaReadOut(progress) && deploymentMediaIdle(now, progress) {
 		log.InfoContext(ctx, "Installation completed, the installation media has been read and is idle", slog.Int64("bytes_covered", progress.BytesCovered))
 
 		return true, mutate, nil
@@ -1630,14 +1647,29 @@ func deploymentInstallCouldBeDone(now time.Time, deployment *provisioning.Server
 	return now.Sub(deployment.StateEnteredAt) >= config.ServerDeploymentMinInstallDuration
 }
 
-// deploymentInstallRebootEndsTheWait reports, whether a reboot the BMC observed
-// can be taken as the end of the first stage of the installation.
-func deploymentInstallRebootEndsTheWait(now time.Time, deployment *provisioning.ServerDeployment, progress provisioning.SeedImageProgress, progressKnown bool) bool {
-	if progressKnown && deploymentMediaReadOut(progress) {
+// deploymentInstallRebootTellsTheInstallation reports, whether a reboot the BMC
+// observed can be taken as the end of the first stage of the installation.
+func deploymentInstallRebootTellsTheInstallation(now time.Time, deployment *provisioning.ServerDeployment, osObserved bool) bool {
+	if osObserved {
 		return true
 	}
 
-	return deploymentInstallCouldBeDone(now, deployment)
+	return now.Sub(deployment.StateEnteredAt) >= config.ServerDeploymentInstallRebootFallbackDelay
+}
+
+// deploymentInstallOSObserved reports, whether the BMC has the server past the
+// hand over to the operating system, which the installer, and only a boot, that
+// got as far as starting it, reaches. A state, that was already reported when
+// the install wait was anchored, belongs to an earlier boot and says nothing
+// about this one.
+func deploymentInstallOSObserved(deployment *provisioning.ServerDeployment, current api.BMCData) bool {
+	progress := current.ServerBootProgress
+
+	if !api.BMCBootProgressHandedOverToOS(progress.LastState) {
+		return false
+	}
+
+	return !progress.LastStateTime.Before(deployment.InstallSnapshot.Taken)
 }
 
 // deploymentMediaReadOut reports, whether enough of the installation media has

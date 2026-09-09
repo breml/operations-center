@@ -348,7 +348,10 @@ func TestServerService_DeploymentControlLoopDrivesDeploymentToATerminalState(t *
 			resolution:  deploymentTestResolution(),
 			trackMedia:  true,
 			worldOptions: []func(*bmcWorld){
-				func(w *bmcWorld) { w.installDuration = config.ServerDeploymentMinInstallDuration / 2 },
+				func(w *bmcWorld) {
+					w.installDuration = config.ServerDeploymentMinInstallDuration / 2
+					w.bootsMediaAgain = true
+				},
 			},
 
 			wantStates:       deploymentStatesHappyPath(),
@@ -362,11 +365,25 @@ func TestServerService_DeploymentControlLoopDrivesDeploymentToATerminalState(t *
 			},
 		},
 		{
+			name:        "success - the BMC caches the installation media instead of streaming it",
+			forceReboot: true,
+			resolution:  deploymentTestResolution(),
+			trackMedia:  true,
+			worldOptions: []func(*bmcWorld){
+				func(w *bmcWorld) { w.cachesMedia = true },
+			},
+
+			wantStates:       deploymentStatesHappyPath(),
+			wantStatus:       api.ServerStatusPending,
+			wantStatusDetail: api.ServerStatusDetailPendingRegistering,
+			assertLog:        log.NotContains("Installation completed, the installation media has been read and is idle"),
+		},
+		{
 			name:        "success - the firmware reboots before the installer even started",
 			forceReboot: true,
 			resolution:  deploymentTestResolution(),
 			worldOptions: []func(*bmcWorld){
-				func(w *bmcWorld) { w.rebootsEarly = true },
+				func(w *bmcWorld) { w.rebootsEarly = true; w.postDuration = worldEarlyRebootDelay + worldBootDuration },
 			},
 
 			wantStates:       deploymentStatesHappyPath(),
