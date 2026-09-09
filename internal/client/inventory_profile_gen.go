@@ -46,3 +46,12 @@ func (c OperationsCenterClient) GetProfile(ctx context.Context, id string) (api.
 
 	return profile, nil
 }
+
+func (c OperationsCenterClient) ResyncProfile(ctx context.Context, id string) error {
+	_, err := c.DoRequest(ctx, http.MethodPost, path.Join("/inventory/profiles", id, ":resync"), nil, nil)
+	if err != nil {
+		return err
+	}
+
+	return nil
+}

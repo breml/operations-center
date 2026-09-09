@@ -46,3 +46,12 @@ func (c OperationsCenterClient) GetNetworkForward(ctx context.Context, id string
 
 	return network_forward, nil
 }
+
+func (c OperationsCenterClient) ResyncNetworkForward(ctx context.Context, id string) error {
+	_, err := c.DoRequest(ctx, http.MethodPost, path.Join("/inventory/network_forwards", id, ":resync"), nil, nil)
+	if err != nil {
+		return err
+	}
+
+	return nil
+}

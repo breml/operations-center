@@ -46,3 +46,12 @@ func (c OperationsCenterClient) GetNetworkAddressSet(ctx context.Context, id str
 
 	return network_address_set, nil
 }
+
+func (c OperationsCenterClient) ResyncNetworkAddressSet(ctx context.Context, id string) error {
+	_, err := c.DoRequest(ctx, http.MethodPost, path.Join("/inventory/network_address_sets", id, ":resync"), nil, nil)
+	if err != nil {
+		return err
+	}
+
+	return nil
+}

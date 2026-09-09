@@ -192,3 +192,61 @@ func Test_GetStorageVolume(t *testing.T) {
 		})
 	}
 }
+
+// Test_ResyncStorageVolume only covers the error paths, which are
+// handled before the Incus API of the cluster is contacted.
+func Test_ResyncStorageVolume(t *testing.T) {
+	d := daemonSetup(t)
+
+	tests := []struct {
+		name       string
+		client     client.OperationsCenterClient
+		dbSeedFunc func(t *testing.T)
+
+		tcNameArg string
+
+		assertErr require.ErrorAssertionFunc
+	}{
+		{
+			name:       "error - not authorized",
+			client:     d.unauthorizedHTTPClient,
+			dbSeedFunc: noop,
+
+			tcNameArg: uuidgen.FromPattern(t, "1").String(),
+
+			assertErr: func(tt require.TestingT, err error, a ...any) {
+				require.ErrorIs(tt, err, domain.ErrNotAuthenticated)
+			},
+		},
+		{
+			name:       "error - not found",
+			client:     d.socketClient,
+			dbSeedFunc: noop,
+
+			tcNameArg: uuidgen.FromPattern(t, "2").String(),
+
+			assertErr: func(tt require.TestingT, err error, a ...any) {
+				require.ErrorIs(tt, err, domain.ErrNotFound)
+			},
+		},
+		{
+			name:       "error - invalid uuid",
+			client:     d.socketClient,
+			dbSeedFunc: noop,
+
+			tcNameArg: "not-a-uuid",
+
+			assertErr: require.Error,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			tc.dbSeedFunc(t)
+
+			err := tc.client.ResyncStorageVolume(t.Context(), tc.tcNameArg)
+
+			tc.assertErr(t, err)
+		})
+	}
+}

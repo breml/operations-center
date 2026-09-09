@@ -46,3 +46,12 @@ func (c OperationsCenterClient) GetNetworkACL(ctx context.Context, id string) (a
 
 	return network_acl, nil
 }
+
+func (c OperationsCenterClient) ResyncNetworkACL(ctx context.Context, id string) error {
+	_, err := c.DoRequest(ctx, http.MethodPost, path.Join("/inventory/network_acls", id, ":resync"), nil, nil)
+	if err != nil {
+		return err
+	}
+
+	return nil
+}

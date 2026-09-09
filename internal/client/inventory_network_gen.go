@@ -46,3 +46,12 @@ func (c OperationsCenterClient) GetNetwork(ctx context.Context, id string) (api.
 
 	return network, nil
 }
+
+func (c OperationsCenterClient) ResyncNetwork(ctx context.Context, id string) error {
+	_, err := c.DoRequest(ctx, http.MethodPost, path.Join("/inventory/networks", id, ":resync"), nil, nil)
+	if err != nil {
+		return err
+	}
+
+	return nil
+}

@@ -46,3 +46,12 @@ func (c OperationsCenterClient) GetImage(ctx context.Context, id string) (api.Im
 
 	return image, nil
 }
+
+func (c OperationsCenterClient) ResyncImage(ctx context.Context, id string) error {
+	_, err := c.DoRequest(ctx, http.MethodPost, path.Join("/inventory/images", id, ":resync"), nil, nil)
+	if err != nil {
+		return err
+	}
+
+	return nil
+}

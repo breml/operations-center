@@ -46,3 +46,12 @@ func (c OperationsCenterClient) GetNetworkIntegration(ctx context.Context, id st
 
 	return network_integration, nil
 }
+
+func (c OperationsCenterClient) ResyncNetworkIntegration(ctx context.Context, id string) error {
+	_, err := c.DoRequest(ctx, http.MethodPost, path.Join("/inventory/network_integrations", id, ":resync"), nil, nil)
+	if err != nil {
+		return err
+	}
+
+	return nil
+}

@@ -46,3 +46,12 @@ func (c OperationsCenterClient) GetNetworkLoadBalancer(ctx context.Context, id s
 
 	return network_load_balancer, nil
 }
+
+func (c OperationsCenterClient) ResyncNetworkLoadBalancer(ctx context.Context, id string) error {
+	_, err := c.DoRequest(ctx, http.MethodPost, path.Join("/inventory/network_load_balancers", id, ":resync"), nil, nil)
+	if err != nil {
+		return err
+	}
+
+	return nil
+}

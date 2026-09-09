@@ -46,3 +46,12 @@ func (c OperationsCenterClient) GetStorageBucket(ctx context.Context, id string)
 
 	return storage_bucket, nil
 }
+
+func (c OperationsCenterClient) ResyncStorageBucket(ctx context.Context, id string) error {
+	_, err := c.DoRequest(ctx, http.MethodPost, path.Join("/inventory/storage_buckets", id, ":resync"), nil, nil)
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
