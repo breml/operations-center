@@ -8,7 +8,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/FuturFusion/operations-center/internal/provisioning"
-	"github.com/FuturFusion/operations-center/internal/provisioning/adapter/incus"
+	"github.com/FuturFusion/operations-center/internal/adapter/incus"
 )
 
 func Test(t *testing.T) {
