@@ -38,6 +38,20 @@ func dellPowerEdgeR740(mutators ...func(data *api.BMCData)) api.BMCData {
 	return data
 }
 
+// dellSecureBoot is the secure boot allow list the Dell profile resolves to. The
+// option ROMs of the hardware stop being trusted, when the certificate they are
+// signed with does not survive the wipe of the signature database.
+func dellSecureBoot() api.BIOSSecureBoot {
+	return api.BIOSSecureBoot{
+		DB: api.BIOSSecureBootDatabase{
+			Certificates: map[string]bool{
+				// Microsoft Option ROM UEFI CA 2023
+				"e5be3e64c6e66a281457ecdece0d6d0787577aad2a3a0144262c10c14ba8d8f1": true,
+			},
+		},
+	}
+}
+
 // TestCatalogue_builtinProfiles resolves the BIOS profiles shipped with
 // Operations Center against the BMC data of the hardware they have been written
 // for. Every case states the complete resolution, so a reorganization of the
@@ -65,6 +79,7 @@ func TestCatalogue_builtinProfiles(t *testing.T) {
 				DeferredAttributes: map[string]any{
 					"Tpm2Algorithm": "SHA256",
 				},
+				SecureBoot: dellSecureBoot(),
 			},
 		},
 		{
@@ -81,6 +96,7 @@ func TestCatalogue_builtinProfiles(t *testing.T) {
 					"SecureBootPolicy": "Custom",
 				},
 				DeferredAttributes: map[string]any{},
+				SecureBoot:         dellSecureBoot(),
 			},
 		},
 		{
@@ -100,6 +116,7 @@ func TestCatalogue_builtinProfiles(t *testing.T) {
 				DeferredAttributes: map[string]any{
 					"Tpm2Algorithm": "SHA256",
 				},
+				SecureBoot: dellSecureBoot(),
 			},
 		},
 		{
