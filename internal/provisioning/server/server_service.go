@@ -2979,13 +2979,13 @@ func nonEmptyStrings(values []string) []string {
 // bmcAttachSecureBootMediaByName generates the secure boot enrollment media for
 // the certificates, attaches it and registers it as the boot device for the next
 // boot.
-func (s *serverService) bmcAttachSecureBootMediaByName(ctx context.Context, log *slog.Logger, server provisioning.Server, secureBoot api.BIOSSecureBoot, virtualMediaID string) (bmcAttachedMedia, error) {
+func (s *serverService) bmcAttachSecureBootMediaByName(ctx context.Context, log *slog.Logger, server provisioning.Server, architecture images.UpdateFileArchitecture, secureBoot api.BIOSSecureBoot, virtualMediaID string) (bmcAttachedMedia, error) {
 	certificates, err := s.secureBootEnrollmentCertificates(ctx, log, secureBoot)
 	if err != nil {
 		return bmcAttachedMedia{}, err
 	}
 
-	mediaID, err := s.secureBootMedia.Generate(ctx, certificates)
+	mediaID, err := s.secureBootMedia.Generate(ctx, architecture, certificates)
 	if err != nil {
 		return bmcAttachedMedia{}, err
 	}

@@ -4,24 +4,29 @@ import (
 	"bytes"
 	"context"
 	"crypto/tls"
+	"fmt"
 	"io"
 	"maps"
 	"os"
 	"path"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
+	incusosapi "github.com/lxc/incus-os/incus-osd/api"
 	"github.com/lxc/incus-os/incus-osd/api/images"
 	"github.com/stmcginnis/gofish/schemas"
 	"github.com/stretchr/testify/require"
 
 	config "github.com/FuturFusion/operations-center/internal/config/daemon"
+	"github.com/FuturFusion/operations-center/internal/domain"
 	envMock "github.com/FuturFusion/operations-center/internal/environment/mock"
 	"github.com/FuturFusion/operations-center/internal/provisioning"
 	adapterMock "github.com/FuturFusion/operations-center/internal/provisioning/adapter/mock"
+	"github.com/FuturFusion/operations-center/internal/provisioning/adapter/securebootcerts"
 	svcMock "github.com/FuturFusion/operations-center/internal/provisioning/mock"
 	"github.com/FuturFusion/operations-center/internal/provisioning/repo/sqlite"
 	"github.com/FuturFusion/operations-center/internal/provisioning/repo/sqlite/entities"
@@ -71,6 +76,12 @@ const (
 	worldBootProgressLate  = "OSRunning"
 	worldBMCHost           = "192.168.1.100"
 	worldServerName        = "one"
+
+	worldSecureBootModeSetup = string(schemas.SetupModeSecureBootModeType)
+	worldSecureBootModeUser  = string(schemas.UserModeSecureBootModeType)
+
+	worldSecureBootMediaPathSegment = "/secure-boot-media/"
+	worldSecureBootMediaID          = "AAAAAAAAAAAA"
 )
 
 // testClock is the clock of the deployment, advanced by the driver instead of
@@ -128,6 +139,14 @@ type bmcWorld struct {
 
 	secureBootPending bool
 
+	secureBootMode         string
+	secureBootResetPending bool
+
+	secureBootMediaArchitecture images.UpdateFileArchitecture
+
+	processorArchitecture   string
+	processorInstructionSet string
+
 	mediaProgress   map[string]provisioning.SeedImageProgress
 	mediaReadStart  time.Time
 	mediaProgressID provisioning.SeedImageID
@@ -145,6 +164,8 @@ type bmcWorld struct {
 	ignorePowerOffs     int
 	biosApplyDrops      int
 	secureBootEnrolls   bool
+	noSecureBootMode    bool
+	noSecureBootReset   bool
 	noBootProgress      bool
 	noLastResetTime     bool
 	uploadTransfer      bool
@@ -182,11 +203,14 @@ func newBMCWorld(t *testing.T, clock *testClock, opts ...func(*bmcWorld)) *bmcWo
 				MediaTypes: []string{string(schemas.CDVirtualMediaType), string(schemas.DVDVirtualMediaType)},
 			},
 		},
-		mediaProgress:     map[string]provisioning.SeedImageProgress{},
-		calls:             map[string]int{},
-		secureBootEnrolls: true,
-		registers:         true,
-		registrationDelay: worldRegistrationDelay,
+		mediaProgress:           map[string]provisioning.SeedImageProgress{},
+		calls:                   map[string]int{},
+		secureBootMode:          worldSecureBootModeUser,
+		processorArchitecture:   "x86",
+		processorInstructionSet: "x86-64",
+		secureBootEnrolls:       true,
+		registers:               true,
+		registrationDelay:       worldRegistrationDelay,
 	}
 
 	for _, opt := range opts {
@@ -421,6 +445,13 @@ func (w *bmcWorld) bmcData() api.BMCData {
 		data.ServerBootProgress = w.bootProgress
 	}
 
+	if !w.noSecureBootMode {
+		data.ServerSecureBootMode = w.secureBootMode
+	}
+
+	data.ServerProcessorArchitecture = w.processorArchitecture
+	data.ServerProcessorInstructionSet = w.processorInstructionSet
+
 	return data
 }
 
@@ -498,6 +529,20 @@ func deploymentBMCClient(t *testing.T, world *bmcWorld) *adapterMock.BMCServerCl
 				})
 			}
 
+			if world.secureBootResetPending {
+				world.secureBootResetPending = false
+
+				world.schedule(worldFirmwareRebootDelay, "firmware cleared the secure boot key databases", func(ctx context.Context, w *bmcWorld) error {
+					w.mu.Lock()
+					defer w.mu.Unlock()
+
+					w.secureBootMode = worldSecureBootModeSetup
+					w.bootNow()
+
+					return nil
+				})
+			}
+
 			if world.secureBootPending {
 				world.secureBootPending = false
 
@@ -518,7 +563,23 @@ func deploymentBMCClient(t *testing.T, world *bmcWorld) *adapterMock.BMCServerCl
 
 			media, ok := world.virtualMedia[world.bootDevice]
 			if ok && media.Inserted {
-				world.startInstall()
+				// The enrollment media enrolls the certificates and reboots,
+				// only the installation media runs an installation.
+				if strings.Contains(media.Image, worldSecureBootMediaPathSegment) {
+					if world.secureBootMode == worldSecureBootModeSetup {
+						world.schedule(worldFirmwareRebootDelay, "enrollment media enrolled the secure boot certificates", func(ctx context.Context, w *bmcWorld) error {
+							w.mu.Lock()
+							defer w.mu.Unlock()
+
+							w.secureBootMode = worldSecureBootModeUser
+							w.bootNow()
+
+							return nil
+						})
+					}
+				} else {
+					world.startInstall()
+				}
 			}
 
 			return monitor(world), nil
@@ -585,6 +646,27 @@ func deploymentBMCClient(t *testing.T, world *bmcWorld) *adapterMock.BMCServerCl
 			world.secureBootPending = world.secureBootEnrolls
 
 			return world.secureBootEnrolls, nil
+		},
+
+		ResetSecureBootKeysFunc: func(ctx context.Context, server provisioning.Server) (bool, *provisioning.BMCTaskMonitor, error) {
+			world.mu.Lock()
+			defer world.mu.Unlock()
+
+			world.calls["ResetSecureBootKeys"]++
+
+			if world.noSecureBootReset {
+				return false, nil, fmt.Errorf("Resetting the secure boot keys is not supported: %w", domain.ErrOperationNotPermitted)
+			}
+
+			if world.secureBootMode == worldSecureBootModeSetup {
+				return false, nil, nil
+			}
+
+			// The firmware picks the cleared key databases up on the next POST,
+			// which is what the deployment gives it a boot for.
+			world.secureBootResetPending = true
+
+			return true, monitor(world), nil
 		},
 
 		AttachMediaFunc: func(ctx context.Context, server provisioning.Server, virtualMediaID string, mediaURL string, setBootDevice bool) (*provisioning.BMCTaskMonitor, error) {
@@ -720,9 +802,12 @@ type deploymentTestWorld struct {
 }
 
 type deploymentWorldConfig struct {
-	forceReboot  bool
-	resolution   *provisioning.BIOSProfileResolution
-	trackMedia   bool
+	forceReboot bool
+	resolution  *provisioning.BIOSProfileResolution
+	trackMedia  bool
+
+	noSecureBootMedia bool
+
 	worldOptions []func(*bmcWorld)
 }
 
@@ -845,6 +930,14 @@ func setupDeploymentWorld(t *testing.T, ctx context.Context, cfg deploymentWorld
 			opts = append(opts, provisioningServer.WithSeedImageProgressPort(deploymentSeedImageProgressPort(world)))
 		}
 
+		if !cfg.noSecureBootMedia {
+			opts = append(opts, provisioningServer.WithSecureBootMediaPort(
+				deploymentSecureBootMediaPort(world),
+				deploymentSecureBootCertificateSource(),
+				deploymentSecureBootCatalogue(t),
+			))
+		}
+
 		return provisioningServer.New(serverDB, nil, nil, tokenSvc, nil, channelSvc, nil, tls.Certificate{}, opts...)
 	}
 
@@ -857,6 +950,41 @@ func setupDeploymentWorld(t *testing.T, ctx context.Context, cfg deploymentWorld
 		logBuf:     logBuf,
 		tokenUUID:  tokenUUID,
 	}
+}
+
+func deploymentSecureBootMediaPort(world *bmcWorld) *adapterMock.SecureBootMediaPortMock {
+	return &adapterMock.SecureBootMediaPortMock{
+		GenerateFunc: func(ctx context.Context, architecture images.UpdateFileArchitecture, certificates provisioning.SecureBootCertificates) (string, error) {
+			world.mu.Lock()
+			defer world.mu.Unlock()
+
+			world.calls["GenerateSecureBootMedia"]++
+			world.secureBootMediaArchitecture = architecture
+
+			return worldSecureBootMediaID, nil
+		},
+	}
+}
+
+func deploymentSecureBootCertificateSource() *adapterMock.SecureBootCertificateSourcePortMock {
+	return &adapterMock.SecureBootCertificateSourcePortMock{
+		GetSecureBootCertificatesFunc: func(ctx context.Context) (incusosapi.InternalSecureBootCertificates, error) {
+			return incusosapi.InternalSecureBootCertificates{
+				PK:  "PK certificate",
+				KEK: []string{"KEK certificate"},
+				DB:  []string{"DB certificate"},
+			}, nil
+		},
+	}
+}
+
+func deploymentSecureBootCatalogue(t *testing.T) provisioning.SecureBootCertificateCataloguePort {
+	t.Helper()
+
+	catalogue, err := securebootcerts.New()
+	require.NoError(t, err)
+
+	return catalogue
 }
 
 // deploymentStateSequence returns the states the deployment has passed through,
@@ -959,6 +1087,23 @@ var (
 	deploymentStatesSecureBootOff = []api.ServerDeploymentState{
 		api.ServerDeploymentStatePowerOffSecureBoot,
 		api.ServerDeploymentStateWaitPowerOffSecureBoot,
+	}
+
+	deploymentStatesSecureBootReset = []api.ServerDeploymentState{
+		api.ServerDeploymentStateResetSecureBootKeys,
+		api.ServerDeploymentStatePowerOnSecureBootReset,
+		api.ServerDeploymentStateWaitSecureBootSetupMode,
+		api.ServerDeploymentStatePowerOffSecureBootReset,
+		api.ServerDeploymentStateWaitPowerOffSecureBootReset,
+	}
+
+	deploymentStatesSecureBootMedia = []api.ServerDeploymentState{
+		api.ServerDeploymentStateAttachSecureBootMedia,
+		api.ServerDeploymentStateWaitSecureBootMediaAttached,
+		api.ServerDeploymentStatePowerOnSecureBootMedia,
+		api.ServerDeploymentStateWaitSecureBootEnrolled,
+		api.ServerDeploymentStatePowerOffSecureBootMedia,
+		api.ServerDeploymentStateWaitPowerOffSecureBootMedia,
 	}
 
 	deploymentStatesSecureBoot = []api.ServerDeploymentState{
