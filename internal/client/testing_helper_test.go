@@ -29,6 +29,7 @@ type testDaemon struct {
 	authorizedHTTPClient   client.OperationsCenterClient
 	unauthorizedHTTPClient client.OperationsCenterClient
 	db                     *sql.DB
+	varDir                 string
 }
 
 func daemonSetup(t *testing.T) testDaemon {
@@ -135,6 +136,7 @@ func daemonSetup(t *testing.T) testDaemon {
 		authorizedHTTPClient:   authorizedHTTPClient,
 		unauthorizedHTTPClient: unauthorizedHTTPClient,
 		db:                     db,
+		varDir:                 tmpDir,
 	}
 }
 
@@ -152,6 +154,20 @@ func getFreeTCPPort(t *testing.T) string {
 	require.True(t, ok)
 
 	return strconv.Itoa(addr.Port)
+}
+
+// seedFile writes content to the given path relative to the var directory of
+// the daemon, creating any intermediate directories.
+func seedFile(t *testing.T, d testDaemon, name string, content []byte) {
+	t.Helper()
+
+	filename := filepath.Join(d.varDir, name)
+
+	err := os.MkdirAll(filepath.Dir(filename), 0o700)
+	require.NoError(t, err)
+
+	err = os.WriteFile(filename, content, 0o600)
+	require.NoError(t, err)
 }
 
 func noop(t *testing.T) {
