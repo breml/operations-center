@@ -21,7 +21,8 @@ out a BMC, that is not answering anymore.
 
 The deployment request carries the token and the token seed the installation
 media is generated from, and optionally the virtual media device, the image
-type, the architecture and the channel. It deliberately carries **no BIOS
+type, the architecture, which is taken from the BMC when it is not given, and
+the channel. It deliberately carries **no BIOS
 attributes**: those are resolved from the BIOS profiles matching the server.
 
 The progress is reported through the server status and status detail, and in
@@ -47,10 +48,31 @@ requested, so an impossible deployment is rejected right away:
    first device advertising CD or DVD support is picked, the devices offered by
    the system taking precedence over the ones offered by the manager. Only a BMC
    reporting no virtual media device at all rejects the request.
+1. The architecture is settled, see below. Everything the deployment generates
+   is built for it, so it is resolved before anything else is.
 1. The BIOS profiles matching the server resolve to something. The resolved
    profile names, attributes, deferred attributes and secure boot allow lists
    are snapshotted onto the deployment, so a later change of the catalog does
    not alter what a running deployment applies.
+
+### Architecture
+
+The architecture is taken from the BMC as primary source.
+`BMCData.ServerArchitecture` reads it from what the BMC reports
+about the first processor, preferring the instruction set, which is the only one
+of the two properties, that carries the bitness — Redfish has no 64 bit x86
+architecture, a 64 bit x86 processor reports the architecture `x86`.
+
+The architecture of the request is therefore an **override**, not the source:
+
+* It is filled in from the BMC, when the request does not name one, and the
+  resolved value is what the deployment is persisted with, so everything built
+  later — the installation media and the secure boot enrollment media — is built
+  for the same architecture.
+* A requested architecture, that contradicts the BMC, is rejected.
+* A request naming none for a server, whose BMC reports nothing to go by, is
+  rejected. Naming one explicitly is the escape hatch for such a BMC, and is
+  accepted with a warning, since it can not be confirmed.
 
 ## State machine
 
