@@ -9,7 +9,9 @@ import (
 
 	incus "github.com/lxc/incus/v7/client"
 
+	"github.com/FuturFusion/operations-center/internal/inventory"
 	"github.com/FuturFusion/operations-center/internal/provisioning"
+	"github.com/FuturFusion/operations-center/internal/provisioning/adapter/scriptlet"
 	"github.com/FuturFusion/operations-center/internal/sql/transaction"
 	"github.com/FuturFusion/operations-center/internal/util/logger"
 )
@@ -31,6 +33,8 @@ var (
 	_ provisioning.ServerClientPort  = Client{}
 	_ provisioning.ClusterClientPort = Client{}
 	_ provisioning.TokenClientPort   = Client{}
+	_ scriptlet.ScriptletClientPort  = Client{}
+	_ inventory.ServerClient         = Client{}
 )
 
 // Option configures a Client.
@@ -119,6 +123,19 @@ func (c Client) getClient(ctx context.Context, endpoint provisioning.Endpoint) (
 	}
 
 	return incus.ConnectIncusWithContext(ctx, endpoint.GetConnectionURL(), args)
+}
+
+// HasExtension reports whether the endpoint supports the given API extension.
+// It reports false, if the connection can not be established or if the client
+// is configured with WithSkipGetServer, since the extensions are part of the
+// server information.
+func (c Client) HasExtension(ctx context.Context, endpoint provisioning.Endpoint, extension string) (exists bool) {
+	client, err := c.getClient(ctx, endpoint)
+	if err != nil {
+		return false
+	}
+
+	return client.HasExtension(extension)
 }
 
 func (c Client) Ping(ctx context.Context, endpoint provisioning.Endpoint) error {

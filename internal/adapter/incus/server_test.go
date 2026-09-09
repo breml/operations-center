@@ -2,13 +2,7 @@ package incus_test
 
 import (
 	"context"
-	"crypto/tls"
-	"crypto/x509"
-	"encoding/pem"
-	"fmt"
-	"io"
 	"net/http"
-	"net/http/httptest"
 	"testing"
 	"time"
 
@@ -25,12 +19,10 @@ import (
 )
 
 func TestClientServer(t *testing.T) {
-	caPool, certPEM, keyPEM := setupCerts(t)
-
-	methods := []methodTestSetServer{
+	methods := []methodTestSet{
 		{
 			name: "IsReady",
-			clientCall: func(ctx context.Context, c clientPort, server provisioning.Server) (any, error) {
+			clientCall: func(ctx context.Context, c incus.Client, server provisioning.Server) (any, error) {
 				return nil, c.IsReady(ctx, server)
 			},
 			testCases: []methodTestCase{
@@ -152,7 +144,7 @@ func TestClientServer(t *testing.T) {
 
 		{
 			name: "GetResources",
-			clientCall: func(ctx context.Context, client clientPort, target provisioning.Server) (any, error) {
+			clientCall: func(ctx context.Context, client incus.Client, target provisioning.Server) (any, error) {
 				return client.GetResources(ctx, target)
 			},
 			testCases: []methodTestCase{
@@ -224,7 +216,7 @@ func TestClientServer(t *testing.T) {
 		},
 		{
 			name: "GetOSData",
-			clientCall: func(ctx context.Context, client clientPort, target provisioning.Server) (any, error) {
+			clientCall: func(ctx context.Context, client incus.Client, target provisioning.Server) (any, error) {
 				return client.GetOSData(ctx, target)
 			},
 			testCases: []methodTestCase{
@@ -504,7 +496,7 @@ func TestClientServer(t *testing.T) {
 		},
 		{
 			name: "GetVersionData",
-			clientCall: func(ctx context.Context, client clientPort, target provisioning.Server) (any, error) {
+			clientCall: func(ctx context.Context, client incus.Client, target provisioning.Server) (any, error) {
 				return client.GetVersionData(ctx, target)
 			},
 			testCases: []methodTestCase{
@@ -1184,7 +1176,7 @@ func TestClientServer(t *testing.T) {
 		},
 		{
 			name: "GetServerType",
-			clientCall: func(ctx context.Context, client clientPort, target provisioning.Server) (any, error) {
+			clientCall: func(ctx context.Context, client incus.Client, target provisioning.Server) (any, error) {
 				return client.GetServerType(ctx, target)
 			},
 			testCases: []methodTestCase{
@@ -1315,7 +1307,7 @@ func TestClientServer(t *testing.T) {
 		},
 		{
 			name: "GetNodeSpecificConfigKeys",
-			clientCall: func(ctx context.Context, client clientPort, target provisioning.Server) (any, error) {
+			clientCall: func(ctx context.Context, client incus.Client, target provisioning.Server) (any, error) {
 				return client.GetNodeSpecificConfigKeys(ctx, target)
 			},
 			testCases: []methodTestCase{
@@ -1399,7 +1391,7 @@ func TestClientServer(t *testing.T) {
 		},
 		{
 			name: "AddApplication",
-			clientCall: func(ctx context.Context, client clientPort, target provisioning.Server) (any, error) {
+			clientCall: func(ctx context.Context, client incus.Client, target provisioning.Server) (any, error) {
 				return nil, client.AddApplication(ctx, target, "debug")
 			},
 			testCases: []methodTestCase{
@@ -1437,7 +1429,7 @@ func TestClientServer(t *testing.T) {
 		},
 		{
 			name: "RestartApplication",
-			clientCall: func(ctx context.Context, client clientPort, target provisioning.Server) (any, error) {
+			clientCall: func(ctx context.Context, client incus.Client, target provisioning.Server) (any, error) {
 				return nil, client.RestartApplication(ctx, target, "openfga")
 			},
 			testCases: []methodTestCase{
@@ -1476,7 +1468,7 @@ func TestClientServer(t *testing.T) {
 
 		{
 			name: "GetSystem",
-			clientCall: func(ctx context.Context, client clientPort, target provisioning.Server) (any, error) {
+			clientCall: func(ctx context.Context, client incus.Client, target provisioning.Server) (any, error) {
 				return client.GetSystem(ctx, target, "kernel")
 			},
 			testCases: []methodTestCase{
@@ -1574,7 +1566,7 @@ func TestClientServer(t *testing.T) {
 		},
 		{
 			name: "UpdateSystem",
-			clientCall: func(ctx context.Context, client clientPort, target provisioning.Server) (any, error) {
+			clientCall: func(ctx context.Context, client incus.Client, target provisioning.Server) (any, error) {
 				return nil, client.UpdateSystem(ctx, target, "kernel", incusosapi.SystemKernel{})
 			},
 			testCases: []methodTestCase{
@@ -1613,7 +1605,7 @@ func TestClientServer(t *testing.T) {
 
 		{
 			name: "GetSystemKernel",
-			clientCall: func(ctx context.Context, client clientPort, target provisioning.Server) (any, error) {
+			clientCall: func(ctx context.Context, client incus.Client, target provisioning.Server) (any, error) {
 				return client.GetSystemKernel(ctx, target)
 			},
 			testCases: []methodTestCase{
@@ -1711,7 +1703,7 @@ func TestClientServer(t *testing.T) {
 		},
 		{
 			name: "UpdateSystemKernel",
-			clientCall: func(ctx context.Context, client clientPort, target provisioning.Server) (any, error) {
+			clientCall: func(ctx context.Context, client incus.Client, target provisioning.Server) (any, error) {
 				return nil, client.UpdateSystemKernel(ctx, target, incusosapi.SystemKernel{})
 			},
 			testCases: []methodTestCase{
@@ -1749,7 +1741,7 @@ func TestClientServer(t *testing.T) {
 		},
 		{
 			name: "GetSystemLogging",
-			clientCall: func(ctx context.Context, client clientPort, target provisioning.Server) (any, error) {
+			clientCall: func(ctx context.Context, client incus.Client, target provisioning.Server) (any, error) {
 				return client.GetSystemLogging(ctx, target)
 			},
 			testCases: []methodTestCase{
@@ -1831,7 +1823,7 @@ func TestClientServer(t *testing.T) {
 		},
 		{
 			name: "UpdateSystemLogging",
-			clientCall: func(ctx context.Context, client clientPort, target provisioning.Server) (any, error) {
+			clientCall: func(ctx context.Context, client incus.Client, target provisioning.Server) (any, error) {
 				return nil, client.UpdateSystemLogging(ctx, target, incusosapi.SystemLogging{})
 			},
 			testCases: []methodTestCase{
@@ -1869,11 +1861,8 @@ func TestClientServer(t *testing.T) {
 		},
 		{
 			name: "GetSecurityConfig",
-			clientCall: func(ctx context.Context, client clientPort, target provisioning.Server) (any, error) {
-				c, ok := client.(provisioning.TokenClientPort)
-				require.True(t, ok)
-
-				return c.GetSecurityConfig(ctx, target)
+			clientCall: func(ctx context.Context, client incus.Client, target provisioning.Server) (any, error) {
+				return client.GetSecurityConfig(ctx, target)
 			},
 			testCases: []methodTestCase{
 				{
@@ -1952,7 +1941,7 @@ func TestClientServer(t *testing.T) {
 		},
 		{
 			name: "GetOSService",
-			clientCall: func(ctx context.Context, client clientPort, target provisioning.Server) (any, error) {
+			clientCall: func(ctx context.Context, client incus.Client, target provisioning.Server) (any, error) {
 				return client.GetOSService(ctx, target, "lvm")
 			},
 			testCases: []methodTestCase{
@@ -2027,7 +2016,7 @@ func TestClientServer(t *testing.T) {
 		},
 		{
 			name: "GetOSServiceCeph",
-			clientCall: func(ctx context.Context, client clientPort, target provisioning.Server) (any, error) {
+			clientCall: func(ctx context.Context, client incus.Client, target provisioning.Server) (any, error) {
 				return client.GetOSServiceCeph(ctx, target)
 			},
 			testCases: []methodTestCase{
@@ -2110,7 +2099,7 @@ func TestClientServer(t *testing.T) {
 		},
 		{
 			name: "GetOSServiceISCSI",
-			clientCall: func(ctx context.Context, client clientPort, target provisioning.Server) (any, error) {
+			clientCall: func(ctx context.Context, client incus.Client, target provisioning.Server) (any, error) {
 				return client.GetOSServiceISCSI(ctx, target)
 			},
 			testCases: []methodTestCase{
@@ -2197,7 +2186,7 @@ func TestClientServer(t *testing.T) {
 		},
 		{
 			name: "GetOSServiceLinstor",
-			clientCall: func(ctx context.Context, client clientPort, target provisioning.Server) (any, error) {
+			clientCall: func(ctx context.Context, client incus.Client, target provisioning.Server) (any, error) {
 				return client.GetOSServiceLinstor(ctx, target)
 			},
 			testCases: []methodTestCase{
@@ -2272,7 +2261,7 @@ func TestClientServer(t *testing.T) {
 		},
 		{
 			name: "GetOSServiceLVM",
-			clientCall: func(ctx context.Context, client clientPort, target provisioning.Server) (any, error) {
+			clientCall: func(ctx context.Context, client incus.Client, target provisioning.Server) (any, error) {
 				return client.GetOSServiceLVM(ctx, target)
 			},
 			testCases: []methodTestCase{
@@ -2347,7 +2336,7 @@ func TestClientServer(t *testing.T) {
 		},
 		{
 			name: "GetOSServiceMultipath",
-			clientCall: func(ctx context.Context, client clientPort, target provisioning.Server) (any, error) {
+			clientCall: func(ctx context.Context, client incus.Client, target provisioning.Server) (any, error) {
 				return client.GetOSServiceMultipath(ctx, target)
 			},
 			testCases: []methodTestCase{
@@ -2422,7 +2411,7 @@ func TestClientServer(t *testing.T) {
 		},
 		{
 			name: "GetOSServiceNVME",
-			clientCall: func(ctx context.Context, client clientPort, target provisioning.Server) (any, error) {
+			clientCall: func(ctx context.Context, client incus.Client, target provisioning.Server) (any, error) {
 				return client.GetOSServiceNVME(ctx, target)
 			},
 			testCases: []methodTestCase{
@@ -2509,7 +2498,7 @@ func TestClientServer(t *testing.T) {
 		},
 		{
 			name: "GetOSServiceOVN",
-			clientCall: func(ctx context.Context, client clientPort, target provisioning.Server) (any, error) {
+			clientCall: func(ctx context.Context, client incus.Client, target provisioning.Server) (any, error) {
 				return client.GetOSServiceOVN(ctx, target)
 			},
 			testCases: []methodTestCase{
@@ -2584,7 +2573,7 @@ func TestClientServer(t *testing.T) {
 		},
 		{
 			name: "GetOSServiceTailscale",
-			clientCall: func(ctx context.Context, client clientPort, target provisioning.Server) (any, error) {
+			clientCall: func(ctx context.Context, client incus.Client, target provisioning.Server) (any, error) {
 				return client.GetOSServiceTailscale(ctx, target)
 			},
 			testCases: []methodTestCase{
@@ -2659,7 +2648,7 @@ func TestClientServer(t *testing.T) {
 		},
 		{
 			name: "GetOSServiceUSBIP",
-			clientCall: func(ctx context.Context, client clientPort, target provisioning.Server) (any, error) {
+			clientCall: func(ctx context.Context, client incus.Client, target provisioning.Server) (any, error) {
 				return client.GetOSServiceUSBIP(ctx, target)
 			},
 			testCases: []methodTestCase{
@@ -2743,7 +2732,7 @@ func TestClientServer(t *testing.T) {
 
 		{
 			name: "UpdateOSService - config map",
-			clientCall: func(ctx context.Context, client clientPort, target provisioning.Server) (any, error) {
+			clientCall: func(ctx context.Context, client incus.Client, target provisioning.Server) (any, error) {
 				return nil, client.UpdateOSService(ctx, target, "lvm", map[string]any{"enabled": true})
 			},
 			testCases: []methodTestCase{
@@ -2788,7 +2777,7 @@ func TestClientServer(t *testing.T) {
 		},
 		{
 			name: "UpdateOSService - service type",
-			clientCall: func(ctx context.Context, client clientPort, target provisioning.Server) (any, error) {
+			clientCall: func(ctx context.Context, client incus.Client, target provisioning.Server) (any, error) {
 				return nil, client.UpdateOSService(ctx, target, "iscsi", incusosapi.ServiceISCSI{
 					Config: incusosapi.ServiceISCSIConfig{
 						Enabled: true,
@@ -2841,7 +2830,7 @@ func TestClientServer(t *testing.T) {
 		},
 		{
 			name: "SetServerConfig",
-			clientCall: func(ctx context.Context, client clientPort, target provisioning.Server) (any, error) {
+			clientCall: func(ctx context.Context, client incus.Client, target provisioning.Server) (any, error) {
 				return nil, client.SetServerConfig(ctx, target, map[string]string{
 					"key": "value",
 				})
@@ -2918,7 +2907,7 @@ func TestClientServer(t *testing.T) {
 		},
 		{
 			name: "EnableCluster",
-			clientCall: func(ctx context.Context, client clientPort, target provisioning.Server) (any, error) {
+			clientCall: func(ctx context.Context, client incus.Client, target provisioning.Server) (any, error) {
 				return client.EnableCluster(ctx, target)
 			},
 			testCases: []methodTestCase{
@@ -3094,7 +3083,7 @@ func TestClientServer(t *testing.T) {
 		},
 		{
 			name: "GetNetworkConfig",
-			clientCall: func(ctx context.Context, client clientPort, target provisioning.Server) (any, error) {
+			clientCall: func(ctx context.Context, client incus.Client, target provisioning.Server) (any, error) {
 				return client.GetNetworkConfig(ctx, target)
 			},
 			testCases: []methodTestCase{
@@ -3198,7 +3187,7 @@ func TestClientServer(t *testing.T) {
 		},
 		{
 			name: "UpdateNetworkConfig",
-			clientCall: func(ctx context.Context, client clientPort, target provisioning.Server) (any, error) {
+			clientCall: func(ctx context.Context, client incus.Client, target provisioning.Server) (any, error) {
 				return nil, client.UpdateNetworkConfig(ctx, target)
 			},
 			testCases: []methodTestCase{
@@ -3233,7 +3222,7 @@ func TestClientServer(t *testing.T) {
 		},
 		{
 			name: "GetStorageConfig",
-			clientCall: func(ctx context.Context, client clientPort, target provisioning.Server) (any, error) {
+			clientCall: func(ctx context.Context, client incus.Client, target provisioning.Server) (any, error) {
 				return client.GetStorageConfig(ctx, target)
 			},
 			testCases: []methodTestCase{
@@ -3329,7 +3318,7 @@ func TestClientServer(t *testing.T) {
 		},
 		{
 			name: "UpdateStorageConfig",
-			clientCall: func(ctx context.Context, client clientPort, target provisioning.Server) (any, error) {
+			clientCall: func(ctx context.Context, client incus.Client, target provisioning.Server) (any, error) {
 				return nil, client.UpdateStorageConfig(ctx, target)
 			},
 			testCases: []methodTestCase{
@@ -3364,7 +3353,7 @@ func TestClientServer(t *testing.T) {
 		},
 		{
 			name: "GetProviderConfig",
-			clientCall: func(ctx context.Context, client clientPort, target provisioning.Server) (any, error) {
+			clientCall: func(ctx context.Context, client incus.Client, target provisioning.Server) (any, error) {
 				return client.GetProviderConfig(ctx, target)
 			},
 			testCases: []methodTestCase{
@@ -3439,7 +3428,7 @@ func TestClientServer(t *testing.T) {
 		},
 		{
 			name: "UpdateProviderConfig",
-			clientCall: func(ctx context.Context, client clientPort, target provisioning.Server) (any, error) {
+			clientCall: func(ctx context.Context, client incus.Client, target provisioning.Server) (any, error) {
 				return nil, client.UpdateProviderConfig(ctx, target, incusosapi.SystemProvider{
 					Config: incusosapi.SystemProviderConfig{
 						Config: map[string]string{
@@ -3480,7 +3469,7 @@ func TestClientServer(t *testing.T) {
 		},
 		{
 			name: "GetUpdateConfig",
-			clientCall: func(ctx context.Context, client clientPort, target provisioning.Server) (any, error) {
+			clientCall: func(ctx context.Context, client incus.Client, target provisioning.Server) (any, error) {
 				return client.GetUpdateConfig(ctx, target)
 			},
 			testCases: []methodTestCase{
@@ -3554,7 +3543,7 @@ func TestClientServer(t *testing.T) {
 		},
 		{
 			name: "UpdateUpdateConfig",
-			clientCall: func(ctx context.Context, client clientPort, target provisioning.Server) (any, error) {
+			clientCall: func(ctx context.Context, client incus.Client, target provisioning.Server) (any, error) {
 				return nil, client.UpdateUpdateConfig(ctx, target, incusosapi.SystemUpdate{
 					Config: incusosapi.SystemUpdateConfig{
 						Channel: "stable",
@@ -3593,7 +3582,7 @@ func TestClientServer(t *testing.T) {
 		},
 		{
 			name: "Evacuate",
-			clientCall: func(ctx context.Context, client clientPort, target provisioning.Server) (any, error) {
+			clientCall: func(ctx context.Context, client incus.Client, target provisioning.Server) (any, error) {
 				return nil, client.Evacuate(ctx, target, func(ctx context.Context, err error) {})
 			},
 			testCases: []methodTestCase{
@@ -3644,7 +3633,7 @@ func TestClientServer(t *testing.T) {
 		},
 		{
 			name: "TriggerSystemAction",
-			clientCall: func(ctx context.Context, client clientPort, target provisioning.Server) (any, error) {
+			clientCall: func(ctx context.Context, client incus.Client, target provisioning.Server) (any, error) {
 				return nil, client.TriggerSystemAction(ctx, target, "", "poweroff", nil)
 			},
 			testCases: []methodTestCase{
@@ -3679,7 +3668,7 @@ func TestClientServer(t *testing.T) {
 		},
 		{
 			name: "Poweroff",
-			clientCall: func(ctx context.Context, client clientPort, target provisioning.Server) (any, error) {
+			clientCall: func(ctx context.Context, client incus.Client, target provisioning.Server) (any, error) {
 				return nil, client.Poweroff(ctx, target)
 			},
 			testCases: []methodTestCase{
@@ -3714,7 +3703,7 @@ func TestClientServer(t *testing.T) {
 		},
 		{
 			name: "Reboot",
-			clientCall: func(ctx context.Context, client clientPort, target provisioning.Server) (any, error) {
+			clientCall: func(ctx context.Context, client incus.Client, target provisioning.Server) (any, error) {
 				return nil, client.Reboot(ctx, target)
 			},
 			testCases: []methodTestCase{
@@ -3749,7 +3738,7 @@ func TestClientServer(t *testing.T) {
 		},
 		{
 			name: "Restore - normal mode",
-			clientCall: func(ctx context.Context, client clientPort, target provisioning.Server) (any, error) {
+			clientCall: func(ctx context.Context, client incus.Client, target provisioning.Server) (any, error) {
 				return nil, client.Restore(ctx, target, false, func(ctx context.Context, err error) {})
 			},
 			testCases: []methodTestCase{
@@ -3804,7 +3793,7 @@ func TestClientServer(t *testing.T) {
 		},
 		{
 			name: "Restore - skip mode",
-			clientCall: func(ctx context.Context, client clientPort, target provisioning.Server) (any, error) {
+			clientCall: func(ctx context.Context, client incus.Client, target provisioning.Server) (any, error) {
 				return nil, client.Restore(ctx, target, true, func(ctx context.Context, err error) {})
 			},
 			testCases: []methodTestCase{
@@ -3859,7 +3848,7 @@ func TestClientServer(t *testing.T) {
 		},
 		{
 			name: "UpdateOS",
-			clientCall: func(ctx context.Context, client clientPort, target provisioning.Server) (any, error) {
+			clientCall: func(ctx context.Context, client incus.Client, target provisioning.Server) (any, error) {
 				return nil, client.UpdateOS(ctx, target)
 			},
 			testCases: []methodTestCase{
@@ -3894,7 +3883,7 @@ func TestClientServer(t *testing.T) {
 		},
 		{
 			name: "JoinCluster",
-			clientCall: func(ctx context.Context, client clientPort, target provisioning.Server) (any, error) {
+			clientCall: func(ctx context.Context, client incus.Client, target provisioning.Server) (any, error) {
 				return nil, client.JoinCluster(ctx, target, "token", "10.10.10.10:8443", provisioning.ClusterEndpoint{}, nil)
 			},
 			testCases: []methodTestCase{
@@ -3982,7 +3971,7 @@ func TestClientServer(t *testing.T) {
 
 		{
 			name: "IncusClient",
-			clientCall: func(ctx context.Context, client clientPort, target provisioning.Server) (any, error) {
+			clientCall: func(ctx context.Context, client incus.Client, target provisioning.Server) (any, error) {
 				return client.IncusClient(ctx, target)
 			},
 			testCases: []methodTestCase{
@@ -4001,116 +3990,5 @@ func TestClientServer(t *testing.T) {
 		},
 	}
 
-	for _, method := range methods {
-		t.Run(method.name, func(t *testing.T) {
-			ctx := context.Background()
-
-			// getClient error - invalid key pair
-			serverGetClientErr(t, method, caPool, certPEM)
-
-			// run regular test cases
-			for _, tc := range method.testCases {
-				t.Run(tc.name, func(t *testing.T) {
-					// Setup
-					var gotPaths []string
-					var gotBodies []string
-					server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-						gotPaths = append(gotPaths, fmt.Sprintf("%s %s", r.Method, r.URL.String()))
-
-						body, _ := io.ReadAll(r.Body)
-						gotBodies = append(gotBodies, string(body))
-
-						response, _ := queue.Pop(t, &tc.response)
-						w.WriteHeader(response.statusCode)
-						_, _ = w.Write(response.responseBody)
-					}))
-					server.TLS = &tls.Config{
-						NextProtos: []string{"h2", "http/1.1"},
-						ClientAuth: tls.RequireAndVerifyClientCert,
-						ClientCAs:  caPool,
-					}
-
-					server.StartTLS()
-					defer server.Close()
-
-					client := incus.New(certPEM, keyPEM, incus.WithSkipGetServer(true))
-
-					serverCert := pem.EncodeToMemory(&pem.Block{
-						Type:  "CERTIFICATE",
-						Bytes: server.Certificate().Raw,
-					})
-
-					target := provisioning.Server{
-						Name:               "server01",
-						ConnectionURL:      server.URL,
-						Certificate:        new(string(serverCert)),
-						Cluster:            new("cluster"),
-						ClusterCertificate: new(string(serverCert)),
-						OSData: api.OSData{
-							Network: incusosapi.SystemNetwork{
-								State: incusosapi.SystemNetworkState{
-									Interfaces: map[string]incusosapi.SystemNetworkInterfaceState{
-										"enp5s0": {
-											Addresses: []string{"192.168.1.2"},
-											Roles:     []string{"clustering"},
-											LACP: &incusosapi.SystemNetworkLACPState{
-												LocalMAC: "45:e3:51:39:0c:51",
-											},
-										},
-									},
-								},
-							},
-						},
-					}
-
-					// Run test
-					retValue, err := method.clientCall(ctx, client, target)
-
-					// Assert
-					tc.assertErr(t, err)
-
-					require.Equal(t, tc.wantPaths, gotPaths)
-
-					if tc.assertResult != nil || retValue != nil {
-						tc.assertResult(t, retValue)
-					}
-
-					if tc.assertBodies != nil {
-						tc.assertBodies(t, gotBodies)
-					}
-
-					require.Empty(t, tc.response)
-				})
-			}
-		})
-	}
-}
-
-func serverGetClientErr(t *testing.T, method methodTestSetServer, caPool *x509.CertPool, certPEM string) {
-	t.Helper()
-
-	server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
-	server.TLS = &tls.Config{
-		NextProtos: []string{"h2", "http/1.1"},
-		ClientAuth: tls.RequireAndVerifyClientCert,
-		ClientCAs:  caPool,
-	}
-
-	server.StartTLS()
-	defer server.Close()
-
-	client := incus.New(certPEM, certPEM, incus.WithSkipGetServer(true)) // invalid key
-
-	serverCert := pem.EncodeToMemory(&pem.Block{
-		Type:  "CERTIFICATE",
-		Bytes: server.Certificate().Raw,
-	})
-
-	target := provisioning.Server{
-		ConnectionURL: server.URL,
-		Certificate:   new(string(serverCert)),
-	}
-
-	_, err := method.clientCall(context.Background(), client, target)
-	require.Error(t, err)
+	runMethodTestSets(t, methods)
 }

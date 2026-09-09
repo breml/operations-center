@@ -4,11 +4,13 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/json"
 	"encoding/pem"
 	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	incusosapi "github.com/lxc/incus-os/incus-osd/api"
@@ -17,35 +19,18 @@ import (
 
 	"github.com/FuturFusion/operations-center/internal/adapter/incus"
 	"github.com/FuturFusion/operations-center/internal/provisioning"
-	"github.com/FuturFusion/operations-center/internal/provisioning/adapter/scriptlet"
 	"github.com/FuturFusion/operations-center/internal/util/testing/queue"
 	"github.com/FuturFusion/operations-center/shared/api"
 )
 
-type clientPort interface {
-	provisioning.ServerClientPort
-	provisioning.ClusterClientPort
-	scriptlet.ScriptletClientPort
-
-	GetOSService(ctx context.Context, server provisioning.Server, name string) (map[string]any, error)
-	GetOSServiceCeph(ctx context.Context, server provisioning.Server) (incusosapi.ServiceCeph, error)
-	GetOSServiceLinstor(ctx context.Context, server provisioning.Server) (incusosapi.ServiceLinstor, error)
-	GetOSServiceLVM(ctx context.Context, server provisioning.Server) (incusosapi.ServiceLVM, error)
-	GetOSServiceOVN(ctx context.Context, server provisioning.Server) (incusosapi.ServiceOVN, error)
-	GetOSServiceTailscale(ctx context.Context, server provisioning.Server) (incusosapi.ServiceTailscale, error)
-	GetOSServiceUSBIP(ctx context.Context, server provisioning.Server) (incusosapi.ServiceUSBIP, error)
-}
-
-type methodTestSetEndpoint struct {
+type methodTestSet struct {
 	name       string
-	clientCall func(ctx context.Context, client clientPort, endpoint provisioning.Endpoint) (any, error)
+	clientCall func(ctx context.Context, client incus.Client, server provisioning.Server) (any, error)
 
-	testCases []methodTestCase
-}
-
-type methodTestSetServer struct {
-	name       string
-	clientCall func(ctx context.Context, client clientPort, endpoint provisioning.Server) (any, error)
+	// wantPathsPrefix compares the recorded request paths against wantPaths by
+	// prefix instead of by exact equality. The generated inventory test cases
+	// depend on this, since their expected paths omit the query string.
+	wantPathsPrefix bool
 
 	testCases []methodTestCase
 }
@@ -69,13 +54,153 @@ func noResult(t *testing.T, res any) {
 	t.Helper()
 }
 
-func TestClient_Endpoint(t *testing.T) {
+func mustJSONMarshal(t *testing.T, in any) []byte {
+	t.Helper()
+
+	out, err := json.Marshal(in)
+	require.NoError(t, err)
+
+	return out
+}
+
+// runMethodTestSets exercises every method test set against an Incus server
+// stub, which answers with the queued responses of the respective test case.
+func runMethodTestSets(t *testing.T, methods []methodTestSet) {
+	t.Helper()
+
 	caPool, certPEM, keyPEM := setupCerts(t)
 
-	methods := []methodTestSetEndpoint{
+	for _, method := range methods {
+		t.Run(method.name, func(t *testing.T) {
+			ctx := context.Background()
+
+			// getClientErr error - invalid key pair
+			getClientErr(t, method, caPool, certPEM)
+
+			// run regular test cases
+			for _, tc := range method.testCases {
+				t.Run(tc.name, func(t *testing.T) {
+					// Setup
+					var gotPaths []string
+					var gotBodies []string
+					server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+						gotPaths = append(gotPaths, fmt.Sprintf("%s %s", r.Method, r.URL.String()))
+
+						body, _ := io.ReadAll(r.Body)
+						gotBodies = append(gotBodies, string(body))
+
+						response, _ := queue.Pop(t, &tc.response)
+						w.WriteHeader(response.statusCode)
+						_, _ = w.Write(response.responseBody)
+					}))
+					server.TLS = &tls.Config{
+						NextProtos: []string{"h2", "http/1.1"},
+						ClientAuth: tls.RequireAndVerifyClientCert,
+						ClientCAs:  caPool,
+					}
+
+					server.StartTLS()
+					defer server.Close()
+
+					client := incus.New(certPEM, keyPEM, incus.WithSkipGetServer(true))
+
+					serverCert := pem.EncodeToMemory(&pem.Block{
+						Type:  "CERTIFICATE",
+						Bytes: server.Certificate().Raw,
+					})
+
+					target := newTestServer(server.URL, string(serverCert))
+
+					// Run test
+					retValue, err := method.clientCall(ctx, client, target)
+
+					// Assert
+					tc.assertErr(t, err)
+
+					if method.wantPathsPrefix {
+						for i := range tc.wantPaths {
+							require.True(t, strings.HasPrefix(gotPaths[i], tc.wantPaths[i]), "want prefix %q, got %q", tc.wantPaths[i], gotPaths[i])
+						}
+					} else {
+						require.Equal(t, tc.wantPaths, gotPaths)
+					}
+
+					if tc.assertResult != nil || retValue != nil {
+						tc.assertResult(t, retValue)
+					}
+
+					if tc.assertBodies != nil {
+						tc.assertBodies(t, gotBodies)
+					}
+
+					require.Empty(t, tc.response)
+				})
+			}
+		})
+	}
+}
+
+// getClientErr asserts that every method of the test set reports an error, if
+// no connection to the Incus server can be established.
+func getClientErr(t *testing.T, method methodTestSet, caPool *x509.CertPool, certPEM string) {
+	t.Helper()
+
+	server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	server.TLS = &tls.Config{
+		NextProtos: []string{"h2", "http/1.1"},
+		ClientAuth: tls.RequireAndVerifyClientCert,
+		ClientCAs:  caPool,
+	}
+
+	server.StartTLS()
+	defer server.Close()
+
+	client := incus.New(certPEM, certPEM, incus.WithSkipGetServer(true)) // invalid key
+
+	serverCert := pem.EncodeToMemory(&pem.Block{
+		Type:  "CERTIFICATE",
+		Bytes: server.Certificate().Raw,
+	})
+
+	target := newTestServer(server.URL, string(serverCert))
+
+	_, err := method.clientCall(context.Background(), client, target)
+	require.Error(t, err)
+}
+
+// newTestServer returns the server the method test sets are run against. It
+// carries a cluster and a network fixture, since some of the methods under test
+// depend on them.
+func newTestServer(connectionURL string, serverCert string) provisioning.Server {
+	return provisioning.Server{
+		Name:               "server01",
+		ConnectionURL:      connectionURL,
+		Certificate:        new(serverCert),
+		Cluster:            new("cluster"),
+		ClusterCertificate: new(serverCert),
+		OSData: api.OSData{
+			Network: incusosapi.SystemNetwork{
+				State: incusosapi.SystemNetworkState{
+					Interfaces: map[string]incusosapi.SystemNetworkInterfaceState{
+						"enp5s0": {
+							Addresses: []string{"192.168.1.2"},
+							Roles:     []string{"clustering"},
+							LACP: &incusosapi.SystemNetworkLACPState{
+								LocalMAC: "45:e3:51:39:0c:51",
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+}
+
+func TestClient_Endpoint(t *testing.T) {
+	methods := []methodTestSet{
 		{
 			name: "Ping",
-			clientCall: func(ctx context.Context, c clientPort, endpoint provisioning.Endpoint) (any, error) {
+			clientCall: func(ctx context.Context, c incus.Client, endpoint provisioning.Server) (any, error) {
 				return nil, c.Ping(ctx, endpoint)
 			},
 			testCases: []methodTestCase{
@@ -113,7 +238,7 @@ func TestClient_Endpoint(t *testing.T) {
 
 		{
 			name: "GetClusterNodeNames",
-			clientCall: func(ctx context.Context, client clientPort, endpoint provisioning.Endpoint) (any, error) {
+			clientCall: func(ctx context.Context, client incus.Client, endpoint provisioning.Server) (any, error) {
 				return client.GetClusterNodeNames(ctx, endpoint)
 			},
 			testCases: []methodTestCase{
@@ -155,7 +280,7 @@ func TestClient_Endpoint(t *testing.T) {
 		},
 		{
 			name: "GetClusterJoinToken",
-			clientCall: func(ctx context.Context, client clientPort, endpoint provisioning.Endpoint) (any, error) {
+			clientCall: func(ctx context.Context, client incus.Client, endpoint provisioning.Server) (any, error) {
 				return client.GetClusterJoinToken(ctx, endpoint, "server1")
 			},
 			testCases: []methodTestCase{
@@ -253,7 +378,7 @@ func TestClient_Endpoint(t *testing.T) {
 		},
 		{
 			name: "UpdateClusterCertificate",
-			clientCall: func(ctx context.Context, client clientPort, endpoint provisioning.Endpoint) (any, error) {
+			clientCall: func(ctx context.Context, client incus.Client, endpoint provisioning.Server) (any, error) {
 				return nil, client.UpdateClusterCertificate(ctx, endpoint, "new cert", "new key")
 			},
 			testCases: []methodTestCase{
@@ -290,7 +415,7 @@ func TestClient_Endpoint(t *testing.T) {
 		},
 		{
 			name: "SystemFactoryReset",
-			clientCall: func(ctx context.Context, c clientPort, endpoint provisioning.Endpoint) (any, error) {
+			clientCall: func(ctx context.Context, c incus.Client, endpoint provisioning.Server) (any, error) {
 				return nil, c.SystemFactoryReset(
 					ctx,
 					endpoint,
@@ -343,100 +468,7 @@ func TestClient_Endpoint(t *testing.T) {
 		},
 	}
 
-	for _, method := range methods {
-		t.Run(method.name, func(t *testing.T) {
-			ctx := context.Background()
-
-			// endpointGetClientErr error - invalid key pair
-			endpointGetClientErr(t, method, caPool, certPEM)
-
-			// run regular test cases
-			for _, tc := range method.testCases {
-				t.Run(tc.name, func(t *testing.T) {
-					// Setup
-					var gotPaths []string
-					var gotBodies []string
-					server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-						gotPaths = append(gotPaths, fmt.Sprintf("%s %s", r.Method, r.URL.String()))
-
-						body, _ := io.ReadAll(r.Body)
-						gotBodies = append(gotBodies, string(body))
-
-						response, _ := queue.Pop(t, &tc.response)
-						w.WriteHeader(response.statusCode)
-						_, _ = w.Write(response.responseBody)
-					}))
-					server.TLS = &tls.Config{
-						NextProtos: []string{"h2", "http/1.1"},
-						ClientAuth: tls.RequireAndVerifyClientCert,
-						ClientCAs:  caPool,
-					}
-
-					server.StartTLS()
-					defer server.Close()
-
-					client := incus.New(certPEM, keyPEM, incus.WithSkipGetServer(true))
-
-					serverCert := pem.EncodeToMemory(&pem.Block{
-						Type:  "CERTIFICATE",
-						Bytes: server.Certificate().Raw,
-					})
-
-					target := provisioning.Server{
-						ConnectionURL: server.URL,
-						Certificate:   new(string(serverCert)),
-					}
-
-					// Run test
-					retValue, err := method.clientCall(ctx, client, target)
-
-					// Assert
-					tc.assertErr(t, err)
-
-					require.Equal(t, tc.wantPaths, gotPaths)
-
-					if tc.assertResult != nil || retValue != nil {
-						tc.assertResult(t, retValue)
-					}
-
-					if tc.assertBodies != nil {
-						tc.assertBodies(t, gotBodies)
-					}
-
-					require.Empty(t, tc.response)
-				})
-			}
-		})
-	}
-}
-
-func endpointGetClientErr(t *testing.T, method methodTestSetEndpoint, caPool *x509.CertPool, certPEM string) {
-	t.Helper()
-
-	server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
-	server.TLS = &tls.Config{
-		NextProtos: []string{"h2", "http/1.1"},
-		ClientAuth: tls.RequireAndVerifyClientCert,
-		ClientCAs:  caPool,
-	}
-
-	server.StartTLS()
-	defer server.Close()
-
-	client := incus.New(certPEM, certPEM, incus.WithSkipGetServer(true)) // invalid key
-
-	serverCert := pem.EncodeToMemory(&pem.Block{
-		Type:  "CERTIFICATE",
-		Bytes: server.Certificate().Raw,
-	})
-
-	target := provisioning.Server{
-		ConnectionURL: server.URL,
-		Certificate:   new(string(serverCert)),
-	}
-
-	_, err := method.clientCall(context.Background(), client, target)
-	require.Error(t, err)
+	runMethodTestSets(t, methods)
 }
 
 func setupCerts(t *testing.T) (caPool *x509.CertPool, certPEM string, keyPEM string) {
