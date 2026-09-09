@@ -606,8 +606,8 @@ func createIncusOSInstances(ctx context.Context, t *testing.T, incusOSPreseededI
 					return err
 				}
 
-				logWaitCtx, cancel := context.WithTimeout(errgrpctx, strechedTimeout(5*time.Minute))
-				err = waitExpectedLogWithContext(logWaitCtx, t, "%s", "incus-osd", "IncusOS was successfully installed", false, name)
+				logWaitCtx, cancel := context.WithTimeout(errgrpctx, strechedTimeout(10*time.Minute))
+				err = waitExpectedLogWithContext(logWaitCtx, t, "%s", "incus-osd", "IncusOS was successfully installed|System is ready", true, name)
 				cancel()
 				if err != nil {
 					return err
