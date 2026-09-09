@@ -126,6 +126,11 @@ func deploymentTestBMCData(virtualMedia ...api.BMCVirtualMedia) api.BMCData {
 	data := api.BMCData{
 		ServerPowerState: "On",
 		VirtualMedia:     map[string]api.BMCVirtualMedia{},
+
+		// What a BMC reports for a 64 bit x86 server. Redfish has no 64 bit x86
+		// architecture, the instruction set is what carries the bitness.
+		ServerProcessorArchitecture:   "x86",
+		ServerProcessorInstructionSet: "x86-64",
 	}
 
 	for _, media := range virtualMedia {
@@ -141,6 +146,64 @@ var (
 	deploymentTestUntypedMedia   = api.BMCVirtualMedia{ID: "manager:2"}
 	deploymentTestUploadingMedia = api.BMCVirtualMedia{ID: "system:1", MediaTypes: []string{"CD", "DVD"}, TransferMethod: "Upload"}
 )
+
+func deploymentTestARMBMCData(virtualMedia ...api.BMCVirtualMedia) api.BMCData {
+	data := deploymentTestBMCData(virtualMedia...)
+	data.ServerProcessorArchitecture = "ARM"
+	data.ServerProcessorInstructionSet = "ARM-A64"
+
+	return data
+}
+
+func deploymentTestBMCDataWithoutProcessor(virtualMedia ...api.BMCVirtualMedia) api.BMCData {
+	data := deploymentTestBMCData(virtualMedia...)
+	data.ServerProcessorArchitecture = ""
+	data.ServerProcessorInstructionSet = ""
+
+	return data
+}
+
+func deploymentTestArchitectureRequest(request provisioning.ServerDeploymentRequest, architecture images.UpdateFileArchitecture) provisioning.ServerDeploymentRequest {
+	request.Architecture = architecture
+
+	return request
+}
+
+func deploymentTestDeployment(tokenUUID uuid.UUID, architecture images.UpdateFileArchitecture) *provisioning.ServerDeployment {
+	return &provisioning.ServerDeployment{
+		State: api.ServerDeploymentStateRefreshBMCData,
+		Request: provisioning.ServerDeploymentRequest{
+			TokenUUID:      tokenUUID,
+			Seed:           "default",
+			ImageType:      api.ImageTypeISO,
+			Architecture:   architecture,
+			VirtualMediaID: "system:1",
+		},
+		ForceReboot:            true,
+		BIOSProfiles:           []string{"generic"},
+		BIOSAttributes:         map[string]any{"BootMode": "Uefi"},
+		BIOSDeferredAttributes: map[string]any{"SecureBoot": "Enabled"},
+		BIOSPending:            true,
+		BIOSDeferredPending:    true,
+		MediaBytesRead:         -1,
+		StartedAt:              deploymentTestDate,
+		StateEnteredAt:         deploymentTestDate,
+		History:                []api.ServerDeploymentStep{},
+	}
+}
+
+func deploymentTestSecureBootMediaRequest(request provisioning.ServerDeploymentRequest) provisioning.ServerDeploymentRequest {
+	request.SecureBootEnrollmentMedia = true
+
+	return request
+}
+
+func deploymentTestSkipAndMediaRequest(request provisioning.ServerDeploymentRequest) provisioning.ServerDeploymentRequest {
+	request.SecureBootEnrollmentMedia = true
+	request.SkipSecureBootCertificates = true
+
+	return request
+}
 
 func TestServerService_DeployByName(t *testing.T) {
 	tokenUUID := uuidgen.FromPattern(t, "1")
@@ -191,6 +254,7 @@ func TestServerService_DeployByName(t *testing.T) {
 		withBIOSProfilePort     bool
 		biosProfileResolve      *provisioning.BIOSProfileResolution
 		biosProfileResolveErr   error
+		withSecureBootMediaPort bool
 
 		wantDeployment *provisioning.ServerDeployment
 		wantStatus     api.ServerStatus
@@ -712,6 +776,95 @@ func TestServerService_DeployByName(t *testing.T) {
 			assertErr: errassert.OperationNotPermittedErrorContains(`has no virtual media device "system:9", the BMC reports system:1`),
 		},
 		{
+			name:                    "success - the architecture is taken from the BMC, when the request does not name one",
+			nameArg:                 "one",
+			requestArg:              deploymentTestArchitectureRequest(validRequest, images.UpdateFileArchitectureUndefined),
+			operationsCenterAddress: deploymentTestOperationsCenterAddress,
+			server:                  new(deploymentTestServer("one")),
+			bmcGetData:              deploymentTestARMBMCData(deploymentTestOpticalMedia),
+			tokenSvcGetByUUID:       validToken,
+			tokenSvcGetSeed:         validSeed,
+			withBIOSProfilePort:     true,
+			biosProfileResolve:      validResolution,
+
+			wantDeployment: deploymentTestDeployment(tokenUUID, images.UpdateFileArchitecture64BitARM),
+			wantStatus:     api.ServerStatusDeploying,
+			assertErr:      require.NoError,
+		},
+		{
+			name:                    "success - an explicit architecture is kept, when the BMC reports nothing to go by",
+			nameArg:                 "one",
+			requestArg:              validRequest,
+			operationsCenterAddress: deploymentTestOperationsCenterAddress,
+			server:                  new(deploymentTestServer("one")),
+			bmcGetData:              deploymentTestBMCDataWithoutProcessor(deploymentTestOpticalMedia),
+			tokenSvcGetByUUID:       validToken,
+			tokenSvcGetSeed:         validSeed,
+			withBIOSProfilePort:     true,
+			biosProfileResolve:      validResolution,
+
+			wantDeployment: deploymentTestDeployment(tokenUUID, images.UpdateFileArchitecture64BitX86),
+			wantStatus:     api.ServerStatusDeploying,
+			assertErr:      require.NoError,
+		},
+		{
+			name:                    "error - the requested architecture contradicts the BMC",
+			nameArg:                 "one",
+			requestArg:              validRequest,
+			operationsCenterAddress: deploymentTestOperationsCenterAddress,
+			server:                  new(deploymentTestServer("one")),
+			bmcGetData:              deploymentTestARMBMCData(deploymentTestOpticalMedia),
+			tokenSvcGetByUUID:       validToken,
+			tokenSvcGetSeed:         validSeed,
+
+			assertErr: errassert.OperationNotPermittedErrorContains(`architecture "x86_64", but its BMC reports "aarch64"`),
+		},
+		{
+			name:                    "error - neither the request nor the BMC names an architecture",
+			nameArg:                 "one",
+			requestArg:              deploymentTestArchitectureRequest(validRequest, images.UpdateFileArchitectureUndefined),
+			operationsCenterAddress: deploymentTestOperationsCenterAddress,
+			server:                  new(deploymentTestServer("one")),
+			bmcGetData:              deploymentTestBMCDataWithoutProcessor(deploymentTestOpticalMedia),
+			tokenSvcGetByUUID:       validToken,
+			tokenSvcGetSeed:         validSeed,
+
+			assertErr: errassert.OperationNotPermittedErrorContains("Failed to determine the architecture of server"),
+		},
+		{
+			name:                    "error - the enrollment media is requested, but is not supported by this installation",
+			nameArg:                 "one",
+			requestArg:              deploymentTestSecureBootMediaRequest(validRequest),
+			operationsCenterAddress: deploymentTestOperationsCenterAddress,
+			server:                  new(deploymentTestServer("one")),
+			bmcGetData:              deploymentTestBMCData(deploymentTestOpticalMedia),
+			tokenSvcGetByUUID:       validToken,
+			tokenSvcGetSeed:         validSeed,
+
+			assertErr: errassert.OperationNotPermittedErrorContains("is not supported by this Operations Center installation"),
+		},
+		{
+			name:                    "error - the enrollment media is requested, but the BMC reports no secure boot mode",
+			nameArg:                 "one",
+			requestArg:              deploymentTestSecureBootMediaRequest(validRequest),
+			operationsCenterAddress: deploymentTestOperationsCenterAddress,
+			server:                  new(deploymentTestServer("one")),
+			bmcGetData:              deploymentTestBMCData(deploymentTestOpticalMedia),
+			tokenSvcGetByUUID:       validToken,
+			tokenSvcGetSeed:         validSeed,
+			withSecureBootMediaPort: true,
+
+			assertErr: errassert.OperationNotPermittedErrorContains("does not report the secure boot mode"),
+		},
+		{
+			name:                    "error - the enrollment media and skipping the certificates are mutually exclusive",
+			nameArg:                 "one",
+			requestArg:              deploymentTestSkipAndMediaRequest(validRequest),
+			operationsCenterAddress: deploymentTestOperationsCenterAddress,
+
+			assertErr: errassert.ValidationErrorContains("can not be enrolled from an enrollment media and be skipped at the same time"),
+		},
+		{
 			name:                    "error - no source of BIOS profiles is configured",
 			nameArg:                 "one",
 			requestArg:              validRequest,
@@ -865,6 +1018,14 @@ func TestServerService_DeployByName(t *testing.T) {
 						return tc.biosProfileResolve, tc.biosProfileResolveErr
 					},
 				}))
+			}
+
+			if tc.withSecureBootMediaPort {
+				opts = append(opts, provisioningServer.WithSecureBootMediaPort(
+					&adapterMock.SecureBootMediaPortMock{},
+					&adapterMock.SecureBootCertificateSourcePortMock{},
+					&adapterMock.SecureBootCertificateCataloguePortMock{},
+				))
 			}
 
 			serverSvc := provisioningServer.New(repo, nil, nil, tokenSvc, nil, channelSvc, nil, tls.Certificate{}, opts...)
