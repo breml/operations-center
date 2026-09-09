@@ -46,3 +46,12 @@ func (c OperationsCenterClient) GetInstance(ctx context.Context, id string) (api
 
 	return instance, nil
 }
+
+func (c OperationsCenterClient) ResyncInstance(ctx context.Context, id string) error {
+	_, err := c.DoRequest(ctx, http.MethodPost, path.Join("/inventory/instances", id, ":resync"), nil, nil)
+	if err != nil {
+		return err
+	}
+
+	return nil
+}

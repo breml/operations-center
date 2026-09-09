@@ -46,3 +46,12 @@ func (c OperationsCenterClient) GetStorageVolume(ctx context.Context, id string)
 
 	return storage_volume, nil
 }
+
+func (c OperationsCenterClient) ResyncStorageVolume(ctx context.Context, id string) error {
+	_, err := c.DoRequest(ctx, http.MethodPost, path.Join("/inventory/storage_volumes", id, ":resync"), nil, nil)
+	if err != nil {
+		return err
+	}
+
+	return nil
+}

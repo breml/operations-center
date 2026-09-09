@@ -143,7 +143,7 @@ func (c OperationsCenterClient) FactoryResetServerSystem(ctx context.Context, na
 		query.Add("tokenSeedName", args[1])
 	}
 
-	_, err := c.DoRequest(ctx, http.MethodDelete, path.Join("/provisioning/servers", name, "system/:factory-reset"), query, nil)
+	_, err := c.DoRequest(ctx, http.MethodPost, path.Join("/provisioning/servers", name, "system/:factory-reset"), query, nil)
 	if err != nil {
 		return err
 	}

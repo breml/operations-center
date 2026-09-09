@@ -18,7 +18,7 @@ import (
 )
 
 func Test_GetWithFilterStorageVolumes(t *testing.T) {
-	socketClient, unauthorizedHTTPClient, db := daemonSetup(t)
+	d := daemonSetup(t)
 
 	tests := []struct {
 		name       string
@@ -30,7 +30,7 @@ func Test_GetWithFilterStorageVolumes(t *testing.T) {
 	}{
 		{
 			name:       "success - empty list",
-			client:     socketClient,
+			client:     d.socketClient,
 			dbSeedFunc: noop,
 
 			assertErr: require.NoError,
@@ -42,24 +42,24 @@ func Test_GetWithFilterStorageVolumes(t *testing.T) {
 		},
 		{
 			name:   "success - one record",
-			client: socketClient,
+			client: d.socketClient,
 
 			dbSeedFunc: func(t *testing.T) {
 				t.Helper()
 
-				_, err := provisioningEntities.CreateCluster(t.Context(), db, provisioning.Cluster{
+				_, err := provisioningEntities.CreateCluster(t.Context(), d.db, provisioning.Cluster{
 					Name:    "clusterOne",
 					Channel: "stable",
 				})
 				require.NoError(t, err)
 
-				_, err = provisioningEntities.CreateServer(t.Context(), db, provisioning.Server{
+				_, err = provisioningEntities.CreateServer(t.Context(), d.db, provisioning.Server{
 					Name:    "serverOne",
 					Channel: "stable",
 				})
 				require.NoError(t, err)
 
-				_, err = entities.CreateStorageVolume(t.Context(), db, inventory.StorageVolume{
+				_, err = entities.CreateStorageVolume(t.Context(), d.db, inventory.StorageVolume{
 					UUID:    uuidgen.FromPattern(t, "1"),
 					Name:    "one",
 					Cluster: "clusterOne",
@@ -78,7 +78,7 @@ func Test_GetWithFilterStorageVolumes(t *testing.T) {
 		},
 		{
 			name:       "error - not authorized",
-			client:     unauthorizedHTTPClient,
+			client:     d.unauthorizedHTTPClient,
 			dbSeedFunc: noop,
 
 			assertErr: func(tt require.TestingT, err error, a ...any) {
@@ -103,7 +103,7 @@ func Test_GetWithFilterStorageVolumes(t *testing.T) {
 }
 
 func Test_GetStorageVolume(t *testing.T) {
-	socketClient, unauthorizedHTTPClient, db := daemonSetup(t)
+	d := daemonSetup(t)
 
 	tests := []struct {
 		name       string
@@ -117,23 +117,23 @@ func Test_GetStorageVolume(t *testing.T) {
 	}{
 		{
 			name:   "success - one record",
-			client: socketClient,
+			client: d.socketClient,
 			dbSeedFunc: func(t *testing.T) {
 				t.Helper()
 
-				_, err := provisioningEntities.CreateCluster(t.Context(), db, provisioning.Cluster{
+				_, err := provisioningEntities.CreateCluster(t.Context(), d.db, provisioning.Cluster{
 					Name:    "clusterOne",
 					Channel: "stable",
 				})
 				require.NoError(t, err)
 
-				_, err = provisioningEntities.CreateServer(t.Context(), db, provisioning.Server{
+				_, err = provisioningEntities.CreateServer(t.Context(), d.db, provisioning.Server{
 					Name:    "serverOne",
 					Channel: "stable",
 				})
 				require.NoError(t, err)
 
-				_, err = entities.CreateStorageVolume(t.Context(), db, inventory.StorageVolume{
+				_, err = entities.CreateStorageVolume(t.Context(), d.db, inventory.StorageVolume{
 					UUID:    uuidgen.FromPattern(t, "1"),
 					Name:    "foo",
 					Cluster: "clusterOne",
@@ -153,7 +153,7 @@ func Test_GetStorageVolume(t *testing.T) {
 		},
 		{
 			name:       "error - not authorized",
-			client:     unauthorizedHTTPClient,
+			client:     d.unauthorizedHTTPClient,
 			dbSeedFunc: noop,
 
 			tcNameArg: "foo",
@@ -167,7 +167,7 @@ func Test_GetStorageVolume(t *testing.T) {
 		},
 		{
 			name:       "error - not found",
-			client:     socketClient,
+			client:     d.socketClient,
 			dbSeedFunc: noop,
 
 			tcNameArg: uuidgen.FromPattern(t, "2").String(),
@@ -189,6 +189,64 @@ func Test_GetStorageVolume(t *testing.T) {
 
 			tc.assertErr(t, err)
 			tc.assertFunc(t, result)
+		})
+	}
+}
+
+// Test_ResyncStorageVolume only covers the error paths, which are
+// handled before the Incus API of the cluster is contacted.
+func Test_ResyncStorageVolume(t *testing.T) {
+	d := daemonSetup(t)
+
+	tests := []struct {
+		name       string
+		client     client.OperationsCenterClient
+		dbSeedFunc func(t *testing.T)
+
+		tcNameArg string
+
+		assertErr require.ErrorAssertionFunc
+	}{
+		{
+			name:       "error - not authorized",
+			client:     d.unauthorizedHTTPClient,
+			dbSeedFunc: noop,
+
+			tcNameArg: uuidgen.FromPattern(t, "1").String(),
+
+			assertErr: func(tt require.TestingT, err error, a ...any) {
+				require.ErrorIs(tt, err, domain.ErrNotAuthenticated)
+			},
+		},
+		{
+			name:       "error - not found",
+			client:     d.socketClient,
+			dbSeedFunc: noop,
+
+			tcNameArg: uuidgen.FromPattern(t, "2").String(),
+
+			assertErr: func(tt require.TestingT, err error, a ...any) {
+				require.ErrorIs(tt, err, domain.ErrNotFound)
+			},
+		},
+		{
+			name:       "error - invalid uuid",
+			client:     d.socketClient,
+			dbSeedFunc: noop,
+
+			tcNameArg: "not-a-uuid",
+
+			assertErr: require.Error,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			tc.dbSeedFunc(t)
+
+			err := tc.client.ResyncStorageVolume(t.Context(), tc.tcNameArg)
+
+			tc.assertErr(t, err)
 		})
 	}
 }

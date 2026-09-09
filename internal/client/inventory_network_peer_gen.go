@@ -46,3 +46,12 @@ func (c OperationsCenterClient) GetNetworkPeer(ctx context.Context, id string) (
 
 	return network_peer, nil
 }
+
+func (c OperationsCenterClient) ResyncNetworkPeer(ctx context.Context, id string) error {
+	_, err := c.DoRequest(ctx, http.MethodPost, path.Join("/inventory/network_peers", id, ":resync"), nil, nil)
+	if err != nil {
+		return err
+	}
+
+	return nil
+}

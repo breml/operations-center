@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/FuturFusion/operations-center/internal/client"
+	"github.com/FuturFusion/operations-center/internal/version"
 	"github.com/FuturFusion/operations-center/shared/api"
 )
 
@@ -130,6 +131,49 @@ func TestIsServerTrusted(t *testing.T) {
 			} else {
 				require.Nil(t, actualCert.Certificate)
 			}
+		})
+	}
+}
+
+func Test_GetAPIServerInfo(t *testing.T) {
+	d := daemonSetup(t)
+
+	tests := []struct {
+		name   string
+		client client.OperationsCenterClient
+
+		wantAuth string
+	}{
+		{
+			name:   "success - authenticated through the unix socket",
+			client: d.socketClient,
+
+			wantAuth: api.AuthenticationMethodUnix,
+		},
+		{
+			name:   "success - authenticated with TLS client certificate",
+			client: d.authorizedHTTPClient,
+
+			wantAuth: api.AuthenticationMethodTLS,
+		},
+		{
+			name:   "success - not authenticated, signals available authentication methods, route is exempt from authentication",
+			client: d.unauthorizedHTTPClient,
+
+			wantAuth: api.AuthenticationUntrusted,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			serverInfo, err := tc.client.GetAPIServerInfo(t.Context())
+			require.NoError(t, err)
+
+			require.Equal(t, tc.wantAuth, serverInfo.Auth)
+			require.Equal(t, api.APIStatus, serverInfo.APIStatus)
+			require.Equal(t, api.APIVersion, serverInfo.APIVersion)
+			require.Equal(t, []string{api.AuthenticationMethodOIDC, api.AuthenticationMethodTLS}, serverInfo.AuthMethods)
+			require.Equal(t, version.Version, serverInfo.ServerVersion)
 		})
 	}
 }

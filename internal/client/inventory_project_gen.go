@@ -46,3 +46,12 @@ func (c OperationsCenterClient) GetProject(ctx context.Context, id string) (api.
 
 	return project, nil
 }
+
+func (c OperationsCenterClient) ResyncProject(ctx context.Context, id string) error {
+	_, err := c.DoRequest(ctx, http.MethodPost, path.Join("/inventory/projects", id, ":resync"), nil, nil)
+	if err != nil {
+		return err
+	}
+
+	return nil
+}

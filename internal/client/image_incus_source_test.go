@@ -7,12 +7,12 @@ import (
 
 	"github.com/FuturFusion/operations-center/internal/client"
 	"github.com/FuturFusion/operations-center/internal/domain"
-	"github.com/FuturFusion/operations-center/internal/provisioning"
-	"github.com/FuturFusion/operations-center/internal/provisioning/repo/sqlite/entities"
+	"github.com/FuturFusion/operations-center/internal/image"
+	imageEntities "github.com/FuturFusion/operations-center/internal/image/repo/sqlite/entities"
 	"github.com/FuturFusion/operations-center/shared/api"
 )
 
-func Test_GetClusterTemplates(t *testing.T) {
+func Test_GetImageIncusSources(t *testing.T) {
 	d := daemonSetup(t)
 
 	tests := []struct {
@@ -21,7 +21,7 @@ func Test_GetClusterTemplates(t *testing.T) {
 		dbSeedFunc func(t *testing.T)
 
 		assertErr  require.ErrorAssertionFunc
-		assertFunc func(t *testing.T, result []api.ClusterTemplate)
+		assertFunc func(t *testing.T, result []api.ImageSource)
 	}{
 		{
 			name:       "success - empty list",
@@ -29,7 +29,7 @@ func Test_GetClusterTemplates(t *testing.T) {
 			dbSeedFunc: noop,
 
 			assertErr: require.NoError,
-			assertFunc: func(t *testing.T, result []api.ClusterTemplate) {
+			assertFunc: func(t *testing.T, result []api.ImageSource) {
 				t.Helper()
 
 				require.Empty(t, result)
@@ -42,31 +42,16 @@ func Test_GetClusterTemplates(t *testing.T) {
 			dbSeedFunc: func(t *testing.T) {
 				t.Helper()
 
-				_, err := entities.CreateClusterTemplate(t.Context(), d.db, provisioning.ClusterTemplate{
-					Name: "foo",
-				})
-				require.NoError(t, err)
+				seedImageIncusSource(t, d)
 			},
 
 			assertErr: require.NoError,
-			assertFunc: func(t *testing.T, result []api.ClusterTemplate) {
+			assertFunc: func(t *testing.T, result []api.ImageSource) {
 				t.Helper()
 
 				require.Len(t, result, 1)
-				require.Equal(t, "foo", result[0].Name)
-			},
-		},
-		{
-			name:       "success - authorized with TLS client certificate",
-			client:     d.authorizedHTTPClient,
-			dbSeedFunc: noop,
-
-			assertErr: require.NoError,
-			assertFunc: func(t *testing.T, result []api.ClusterTemplate) {
-				t.Helper()
-
-				require.Len(t, result, 1)
-				require.Equal(t, "foo", result[0].Name)
+				require.Equal(t, "sourceOne", result[0].Name)
+				require.Equal(t, "https://images.example.com", result[0].URL)
 			},
 		},
 		{
@@ -77,7 +62,7 @@ func Test_GetClusterTemplates(t *testing.T) {
 			assertErr: func(tt require.TestingT, err error, a ...any) {
 				require.ErrorIs(tt, err, domain.ErrNotAuthenticated)
 			},
-			assertFunc: func(t *testing.T, result []api.ClusterTemplate) {
+			assertFunc: func(t *testing.T, result []api.ImageSource) {
 				t.Helper()
 			},
 		},
@@ -87,7 +72,7 @@ func Test_GetClusterTemplates(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			tc.dbSeedFunc(t)
 
-			result, err := tc.client.GetClusterTemplates(t.Context())
+			result, err := tc.client.GetImageIncusSources(t.Context())
 
 			tc.assertErr(t, err)
 			tc.assertFunc(t, result)
@@ -95,7 +80,7 @@ func Test_GetClusterTemplates(t *testing.T) {
 	}
 }
 
-func Test_GetClusterTemplate(t *testing.T) {
+func Test_GetImageIncusSource(t *testing.T) {
 	d := daemonSetup(t)
 
 	tests := []struct {
@@ -106,7 +91,7 @@ func Test_GetClusterTemplate(t *testing.T) {
 		tcNameArg string
 
 		assertErr  require.ErrorAssertionFunc
-		assertFunc func(t *testing.T, result api.ClusterTemplate)
+		assertFunc func(t *testing.T, result api.ImageSource)
 	}{
 		{
 			name:   "success - one record",
@@ -114,19 +99,18 @@ func Test_GetClusterTemplate(t *testing.T) {
 			dbSeedFunc: func(t *testing.T) {
 				t.Helper()
 
-				_, err := entities.CreateClusterTemplate(t.Context(), d.db, provisioning.ClusterTemplate{
-					Name: "foo",
-				})
-				require.NoError(t, err)
+				seedImageIncusSource(t, d)
 			},
 
-			tcNameArg: "foo",
+			tcNameArg: "sourceOne",
 
 			assertErr: require.NoError,
-			assertFunc: func(t *testing.T, result api.ClusterTemplate) {
+			assertFunc: func(t *testing.T, result api.ImageSource) {
 				t.Helper()
 
-				require.Equal(t, "foo", result.Name)
+				require.Equal(t, "sourceOne", result.Name)
+				require.Equal(t, "https://images.example.com", result.URL)
+				require.Equal(t, `architecture == "amd64"`, result.FilterExpression)
 			},
 		},
 		{
@@ -134,12 +118,12 @@ func Test_GetClusterTemplate(t *testing.T) {
 			client:     d.unauthorizedHTTPClient,
 			dbSeedFunc: noop,
 
-			tcNameArg: "foo",
+			tcNameArg: "sourceOne",
 
 			assertErr: func(tt require.TestingT, err error, a ...any) {
 				require.ErrorIs(tt, err, domain.ErrNotAuthenticated)
 			},
-			assertFunc: func(t *testing.T, result api.ClusterTemplate) {
+			assertFunc: func(t *testing.T, result api.ImageSource) {
 				t.Helper()
 			},
 		},
@@ -150,10 +134,10 @@ func Test_GetClusterTemplate(t *testing.T) {
 
 			tcNameArg: "unknown",
 
-			assertErr: func(t require.TestingT, err error, a ...any) {
-				require.ErrorIs(t, err, domain.ErrNotFound)
+			assertErr: func(tt require.TestingT, err error, a ...any) {
+				require.ErrorIs(tt, err, domain.ErrNotFound)
 			},
-			assertFunc: func(t *testing.T, result api.ClusterTemplate) {
+			assertFunc: func(t *testing.T, result api.ImageSource) {
 				t.Helper()
 			},
 		},
@@ -163,7 +147,7 @@ func Test_GetClusterTemplate(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			tc.dbSeedFunc(t)
 
-			result, err := tc.client.GetClusterTemplate(t.Context(), tc.tcNameArg)
+			result, err := tc.client.GetImageIncusSource(t.Context(), tc.tcNameArg)
 
 			tc.assertErr(t, err)
 			tc.assertFunc(t, result)
@@ -171,7 +155,7 @@ func Test_GetClusterTemplate(t *testing.T) {
 	}
 }
 
-func Test_CreateClusterTemplate(t *testing.T) {
+func Test_CreateImageIncusSource(t *testing.T) {
 	d := daemonSetup(t)
 
 	tests := []struct {
@@ -179,113 +163,21 @@ func Test_CreateClusterTemplate(t *testing.T) {
 		client     client.OperationsCenterClient
 		dbSeedFunc func(t *testing.T)
 
-		clusterTemplate api.ClusterTemplatePost
+		imageSource api.ImageSourcePost
 
-		assertErr require.ErrorAssertionFunc
+		assertErr  require.ErrorAssertionFunc
+		assertFunc func(t *testing.T)
 	}{
 		{
 			name:       "success",
 			client:     d.socketClient,
 			dbSeedFunc: noop,
 
-			clusterTemplate: api.ClusterTemplatePost{
-				Name: "new-cluster-template",
-				ClusterTemplatePut: api.ClusterTemplatePut{
-					Description: "description",
-				},
-			},
-
-			assertErr: require.NoError,
-		},
-		{
-			name:       "error - not authorized",
-			client:     d.unauthorizedHTTPClient,
-			dbSeedFunc: noop,
-
-			assertErr: func(tt require.TestingT, err error, a ...any) {
-				require.ErrorIs(tt, err, domain.ErrNotAuthenticated)
-			},
-		},
-		{
-			name:       "error - validation",
-			client:     d.socketClient,
-			dbSeedFunc: noop,
-
-			clusterTemplate: api.ClusterTemplatePost{
-				Name: "", // invalid no name provided
-				ClusterTemplatePut: api.ClusterTemplatePut{
-					Description: "description",
-				},
-			},
-
-			assertErr: require.Error,
-		},
-		{
-			name:   "error - confilict",
-			client: d.socketClient,
-			dbSeedFunc: func(t *testing.T) {
-				t.Helper()
-
-				_, err := entities.CreateClusterTemplate(t.Context(), d.db, provisioning.ClusterTemplate{
-					Name: "foo",
-				})
-				require.NoError(t, err)
-			},
-
-			clusterTemplate: api.ClusterTemplatePost{
-				Name: "foo", // already exists
-			},
-
-			assertErr: require.Error,
-		},
-	}
-
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			tc.dbSeedFunc(t)
-
-			err := tc.client.CreateClusterTemplate(t.Context(), tc.clusterTemplate)
-
-			tc.assertErr(t, err)
-		})
-	}
-}
-
-func Test_UpdateClusterTemplate(t *testing.T) {
-	d := daemonSetup(t)
-
-	tests := []struct {
-		name       string
-		client     client.OperationsCenterClient
-		dbSeedFunc func(t *testing.T)
-
-		tcNameArg       string
-		clusterTemplate api.ClusterTemplatePut
-
-		assertErr  require.ErrorAssertionFunc
-		assertFunc func(t *testing.T)
-	}{
-		{
-			name:   "success",
-			client: d.socketClient,
-			dbSeedFunc: func(t *testing.T) {
-				t.Helper()
-
-				_, err := entities.CreateClusterTemplate(t.Context(), d.db, provisioning.ClusterTemplate{
-					Name:        "foo",
-					Description: "description",
-				})
-				require.NoError(t, err)
-			},
-
-			tcNameArg: "foo",
-			clusterTemplate: api.ClusterTemplatePut{
-				Description:           "updated description",
-				ServiceConfigTemplate: "service: @variable@",
-				Variables: api.ClusterTemplateVariables{
-					"variable": api.ClusterTemplateVariable{
-						Description: "a variable",
-					},
+			imageSource: api.ImageSourcePost{
+				Name: "newSource",
+				ImageSourcePut: api.ImageSourcePut{
+					URL:              "https://images.example.com",
+					FilterExpression: `architecture == "amd64"`,
 				},
 			},
 
@@ -293,11 +185,9 @@ func Test_UpdateClusterTemplate(t *testing.T) {
 			assertFunc: func(t *testing.T) {
 				t.Helper()
 
-				clusterTemplate, err := d.socketClient.GetClusterTemplate(t.Context(), "foo")
+				imageSource, err := d.socketClient.GetImageIncusSource(t.Context(), "newSource")
 				require.NoError(t, err)
-				require.Equal(t, "updated description", clusterTemplate.Description)
-				require.Equal(t, "service: @variable@", clusterTemplate.ServiceConfigTemplate)
-				require.Contains(t, clusterTemplate.Variables, "variable")
+				require.Equal(t, "https://images.example.com", imageSource.URL)
 			},
 		},
 		{
@@ -305,7 +195,12 @@ func Test_UpdateClusterTemplate(t *testing.T) {
 			client:     d.unauthorizedHTTPClient,
 			dbSeedFunc: noop,
 
-			tcNameArg: "foo",
+			imageSource: api.ImageSourcePost{
+				Name: "unauthorized",
+				ImageSourcePut: api.ImageSourcePut{
+					FilterExpression: "true",
+				},
+			},
 
 			assertErr: func(tt require.TestingT, err error, a ...any) {
 				require.ErrorIs(tt, err, domain.ErrNotAuthenticated)
@@ -313,27 +208,60 @@ func Test_UpdateClusterTemplate(t *testing.T) {
 			assertFunc: noop,
 		},
 		{
-			name:       "error - not found",
+			name:       "error - validation, empty name",
 			client:     d.socketClient,
 			dbSeedFunc: noop,
 
-			tcNameArg: "unknown",
+			imageSource: api.ImageSourcePost{
+				Name: "",
+				ImageSourcePut: api.ImageSourcePut{
+					FilterExpression: "true",
+				},
+			},
+
+			assertErr:  require.Error,
+			assertFunc: noop,
+		},
+		{
+			name:       "error - validation, empty filter expression",
+			client:     d.socketClient,
+			dbSeedFunc: noop,
+
+			imageSource: api.ImageSourcePost{
+				Name: "withoutFilterExpression",
+			},
 
 			assertErr: func(tt require.TestingT, err error, a ...any) {
-				require.ErrorIs(tt, err, domain.ErrNotFound)
+				require.ErrorContains(tt, err, "Empty filter expression is not permitted")
 			},
 			assertFunc: noop,
 		},
 		{
-			name:       "error - validation",
+			name:       "error - validation, invalid filter expression",
 			client:     d.socketClient,
 			dbSeedFunc: noop,
 
-			tcNameArg: "foo",
-			clusterTemplate: api.ClusterTemplatePut{
-				// Invalid, the variable is not used in any of the templates.
-				Variables: api.ClusterTemplateVariables{
-					"unused": api.ClusterTemplateVariable{},
+			imageSource: api.ImageSourcePost{
+				Name: "invalidFilterExpression",
+				ImageSourcePut: api.ImageSourcePut{
+					FilterExpression: "this is not a valid expression",
+				},
+			},
+
+			assertErr: func(tt require.TestingT, err error, a ...any) {
+				require.ErrorContains(tt, err, "failed to validate filter expression")
+			},
+			assertFunc: noop,
+		},
+		{
+			name:       "error - conflict",
+			client:     d.socketClient,
+			dbSeedFunc: noop,
+
+			imageSource: api.ImageSourcePost{
+				Name: "newSource", // already exists
+				ImageSourcePut: api.ImageSourcePut{
+					FilterExpression: "true",
 				},
 			},
 
@@ -346,7 +274,7 @@ func Test_UpdateClusterTemplate(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			tc.dbSeedFunc(t)
 
-			err := tc.client.UpdateClusterTemplate(t.Context(), tc.tcNameArg, tc.clusterTemplate)
+			err := tc.client.CreateImageIncusSource(t.Context(), tc.imageSource)
 
 			tc.assertErr(t, err)
 			tc.assertFunc(t)
@@ -354,7 +282,100 @@ func Test_UpdateClusterTemplate(t *testing.T) {
 	}
 }
 
-func Test_RenameClusterTemplate(t *testing.T) {
+func Test_UpdateImageIncusSource(t *testing.T) {
+	d := daemonSetup(t)
+
+	tests := []struct {
+		name       string
+		client     client.OperationsCenterClient
+		dbSeedFunc func(t *testing.T)
+
+		tcNameArg   string
+		imageSource api.ImageSourcePut
+
+		assertErr  require.ErrorAssertionFunc
+		assertFunc func(t *testing.T)
+	}{
+		{
+			name:   "success",
+			client: d.socketClient,
+			dbSeedFunc: func(t *testing.T) {
+				t.Helper()
+
+				seedImageIncusSource(t, d)
+			},
+
+			tcNameArg: "sourceOne",
+			imageSource: api.ImageSourcePut{
+				URL:              "https://updated.example.com",
+				FilterExpression: `architecture == "arm64"`,
+			},
+
+			assertErr: require.NoError,
+			assertFunc: func(t *testing.T) {
+				t.Helper()
+
+				imageSource, err := d.socketClient.GetImageIncusSource(t.Context(), "sourceOne")
+				require.NoError(t, err)
+				require.Equal(t, "https://updated.example.com", imageSource.URL)
+				require.Equal(t, `architecture == "arm64"`, imageSource.FilterExpression)
+			},
+		},
+		{
+			name:       "error - not authorized",
+			client:     d.unauthorizedHTTPClient,
+			dbSeedFunc: noop,
+
+			tcNameArg: "sourceOne",
+
+			assertErr: func(tt require.TestingT, err error, a ...any) {
+				require.ErrorIs(tt, err, domain.ErrNotAuthenticated)
+			},
+			assertFunc: noop,
+		},
+		{
+			name:       "error - not found",
+			client:     d.socketClient,
+			dbSeedFunc: noop,
+
+			tcNameArg: "unknown",
+			imageSource: api.ImageSourcePut{
+				FilterExpression: "true",
+			},
+
+			assertErr: func(tt require.TestingT, err error, a ...any) {
+				require.ErrorIs(tt, err, domain.ErrNotFound)
+			},
+			assertFunc: noop,
+		},
+		{
+			name:       "error - validation, empty filter expression",
+			client:     d.socketClient,
+			dbSeedFunc: noop,
+
+			tcNameArg:   "sourceOne",
+			imageSource: api.ImageSourcePut{},
+
+			assertErr: func(tt require.TestingT, err error, a ...any) {
+				require.ErrorContains(tt, err, "Empty filter expression is not permitted")
+			},
+			assertFunc: noop,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			tc.dbSeedFunc(t)
+
+			err := tc.client.UpdateImageIncusSource(t.Context(), tc.tcNameArg, tc.imageSource)
+
+			tc.assertErr(t, err)
+			tc.assertFunc(t)
+		})
+	}
+}
+
+func Test_DeleteImageIncusSource(t *testing.T) {
 	d := daemonSetup(t)
 
 	tests := []struct {
@@ -363,7 +384,6 @@ func Test_RenameClusterTemplate(t *testing.T) {
 		dbSeedFunc func(t *testing.T)
 
 		tcNameArg string
-		tcNewName string
 
 		assertErr  require.ErrorAssertionFunc
 		assertFunc func(t *testing.T)
@@ -374,24 +394,16 @@ func Test_RenameClusterTemplate(t *testing.T) {
 			dbSeedFunc: func(t *testing.T) {
 				t.Helper()
 
-				_, err := entities.CreateClusterTemplate(t.Context(), d.db, provisioning.ClusterTemplate{
-					Name: "foo",
-				})
-				require.NoError(t, err)
+				seedImageIncusSource(t, d)
 			},
 
-			tcNameArg: "foo",
-			tcNewName: "bar",
+			tcNameArg: "sourceOne",
 
 			assertErr: require.NoError,
 			assertFunc: func(t *testing.T) {
 				t.Helper()
 
-				clusterTemplate, err := d.socketClient.GetClusterTemplate(t.Context(), "bar")
-				require.NoError(t, err)
-				require.Equal(t, "bar", clusterTemplate.Name)
-
-				_, err = d.socketClient.GetClusterTemplate(t.Context(), "foo")
+				_, err := d.socketClient.GetImageIncusSource(t.Context(), "sourceOne")
 				require.ErrorIs(t, err, domain.ErrNotFound)
 			},
 		},
@@ -400,8 +412,7 @@ func Test_RenameClusterTemplate(t *testing.T) {
 			client:     d.unauthorizedHTTPClient,
 			dbSeedFunc: noop,
 
-			tcNameArg: "bar",
-			tcNewName: "baz",
+			tcNameArg: "sourceOne",
 
 			assertErr: func(tt require.TestingT, err error, a ...any) {
 				require.ErrorIs(tt, err, domain.ErrNotAuthenticated)
@@ -414,40 +425,10 @@ func Test_RenameClusterTemplate(t *testing.T) {
 			dbSeedFunc: noop,
 
 			tcNameArg: "unknown",
-			tcNewName: "baz",
 
 			assertErr: func(tt require.TestingT, err error, a ...any) {
 				require.ErrorIs(tt, err, domain.ErrNotFound)
 			},
-			assertFunc: noop,
-		},
-		{
-			name:       "error - new name is empty",
-			client:     d.socketClient,
-			dbSeedFunc: noop,
-
-			tcNameArg: "bar",
-			tcNewName: "",
-
-			assertErr:  require.Error,
-			assertFunc: noop,
-		},
-		{
-			name:   "error - conflict",
-			client: d.socketClient,
-			dbSeedFunc: func(t *testing.T) {
-				t.Helper()
-
-				_, err := entities.CreateClusterTemplate(t.Context(), d.db, provisioning.ClusterTemplate{
-					Name: "conflicting",
-				})
-				require.NoError(t, err)
-			},
-
-			tcNameArg: "bar",
-			tcNewName: "conflicting", // already exists
-
-			assertErr:  require.Error,
 			assertFunc: noop,
 		},
 	}
@@ -456,7 +437,7 @@ func Test_RenameClusterTemplate(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			tc.dbSeedFunc(t)
 
-			err := tc.client.RenameClusterTemplate(t.Context(), tc.tcNameArg, tc.tcNewName)
+			err := tc.client.DeleteImageIncusSource(t.Context(), tc.tcNameArg)
 
 			tc.assertErr(t, err)
 			tc.assertFunc(t)
@@ -464,7 +445,9 @@ func Test_RenameClusterTemplate(t *testing.T) {
 	}
 }
 
-func Test_DeleteClusterTemplate(t *testing.T) {
+// Test_RefreshImageIncusSource only covers the error paths, which are handled
+// before the remote simplestreams server is contacted.
+func Test_RefreshImageIncusSource(t *testing.T) {
 	d := daemonSetup(t)
 
 	tests := []struct {
@@ -477,27 +460,11 @@ func Test_DeleteClusterTemplate(t *testing.T) {
 		assertErr require.ErrorAssertionFunc
 	}{
 		{
-			name:   "success - one record",
-			client: d.socketClient,
-			dbSeedFunc: func(t *testing.T) {
-				t.Helper()
-
-				_, err := entities.CreateClusterTemplate(t.Context(), d.db, provisioning.ClusterTemplate{
-					Name: "foo",
-				})
-				require.NoError(t, err)
-			},
-
-			tcNameArg: "foo",
-
-			assertErr: require.NoError,
-		},
-		{
 			name:       "error - not authorized",
 			client:     d.unauthorizedHTTPClient,
 			dbSeedFunc: noop,
 
-			tcNameArg: "foo",
+			tcNameArg: "sourceOne",
 
 			assertErr: func(tt require.TestingT, err error, a ...any) {
 				require.ErrorIs(tt, err, domain.ErrNotAuthenticated)
@@ -510,8 +477,8 @@ func Test_DeleteClusterTemplate(t *testing.T) {
 
 			tcNameArg: "unknown",
 
-			assertErr: func(t require.TestingT, err error, a ...any) {
-				require.ErrorIs(t, err, domain.ErrNotFound)
+			assertErr: func(tt require.TestingT, err error, a ...any) {
+				require.ErrorIs(tt, err, domain.ErrNotFound)
 			},
 		},
 	}
@@ -520,9 +487,20 @@ func Test_DeleteClusterTemplate(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			tc.dbSeedFunc(t)
 
-			err := tc.client.DeleteClusterTemplate(t.Context(), tc.tcNameArg)
+			err := tc.client.RefreshImageIncusSource(t.Context(), tc.tcNameArg)
 
 			tc.assertErr(t, err)
 		})
 	}
+}
+
+func seedImageIncusSource(t *testing.T, d testDaemon) {
+	t.Helper()
+
+	_, err := imageEntities.CreateIncusImageSource(t.Context(), d.db, image.IncusImageSource{
+		Name:             "sourceOne",
+		URL:              "https://images.example.com",
+		FilterExpression: `architecture == "amd64"`,
+	})
+	require.NoError(t, err)
 }
