@@ -70,6 +70,10 @@ func SetLogLevel(level slog.Level) error {
 	loggerMu.Lock()
 	defer loggerMu.Unlock()
 
+	if logger.writer == nil {
+		logger.writer = os.Stderr
+	}
+
 	var replaceAttrFunc func(groups []string, attr slog.Attr) slog.Attr
 
 	var debug bool
