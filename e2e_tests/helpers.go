@@ -285,8 +285,13 @@ func logVMDebugInfo(t *testing.T, vms ...string) {
 	}
 
 	logCmd("incus list", "incus list")
+	logCmd("storage pool", "incus storage info default")
+	logCmd("storage volumes", "incus storage volume list default")
+	logCmd("free disk space", "df -h")
+	logCmd("zpool list", "zpool list")
 
 	for _, vm := range vms {
+		logCmd(fmt.Sprintf("incus info for %q", vm), "incus info %s --show-log", vm)
 		logCmd(fmt.Sprintf("incus console log for %q", vm), "incus console %s --show-log", vm)
 		logCmd(fmt.Sprintf("incus-osd log for %q", vm), `incus exec %s -- bash -c "journalctl -b -u incus-osd --no-pager -n 100"`, vm)
 		logCmd(fmt.Sprintf("incus-osd unit state for %q", vm), `incus exec %s -- bash -c "systemctl status --no-pager incus-osd"`, vm)
@@ -330,6 +335,21 @@ func waitAgentRunningWithContext(ctx context.Context, t *testing.T, vm string, a
 	lastStatus := ""
 	lastErr := ""
 
+	// errGiveUp reports the given unrecoverable instance state, after dumping
+	// the debug information. Once the instance is in such a state, waiting for
+	// it or restarting it is pointless.
+	errGiveUp := func(stateErr error) error {
+		logVMDebugInfo(t, vm)
+
+		return fmt.Errorf("Giving up waiting for the incus agent on %q after %s: %w", vm, time.Since(start).String(), stateErr)
+	}
+
+	// The instance might already be beyond rescue before the first wait.
+	stateErr := errUnrecoverableInstanceState(ctx, t, vm)
+	if stateErr != nil {
+		return errGiveUp(stateErr)
+	}
+
 	for attempt := 0; ctx.Err() == nil; attempt++ {
 		timeoutSeconds := -1 // -1 disables the timeout for incus wait.
 		if hasDeadline {
@@ -357,6 +377,11 @@ func waitAgentRunningWithContext(ctx context.Context, t *testing.T, vm string, a
 		status, err := instanceStatusWithContext(ctx, t, vm)
 		if err == nil {
 			lastStatus = status
+		}
+
+		stateErr = errUnrecoverableStatus(vm, lastStatus)
+		if stateErr != nil {
+			return errGiveUp(stateErr)
 		}
 
 		if lastStatus != instanceStatusRunning {
@@ -465,6 +490,16 @@ func waitExpectedLogWithContext(ctx context.Context, t *testing.T, vm string, un
 
 			if count%10 == 0 {
 				t.Logf("Failed to read log of unit %q on %s: %s", unit, vm, lastErr)
+
+				// The log of an instance, which is not running, is not
+				// readable. If the instance can not recover, there is no point
+				// in waiting for the remainder of the timeout.
+				stateErr := errUnrecoverableInstanceState(ctx, t, vm)
+				if stateErr != nil {
+					logVMDebugInfo(t, vm)
+
+					return fmt.Errorf("Giving up waiting for log %q on %s after %ds: %w", want, vm, count, stateErr)
+				}
 			}
 		}
 
@@ -822,7 +857,10 @@ func mustWriteFileWithContent(t *testing.T, filename string, size int) string {
 	return fmt.Sprintf("%x", sha256.Sum256(content))
 }
 
-const instanceStatusRunning = "Running"
+const (
+	instanceStatusRunning = "Running"
+	instanceStatusError   = "Error"
+)
 
 func instanceStatusWithContext(ctx context.Context, t *testing.T, name string) (string, error) {
 	t.Helper()
@@ -835,6 +873,30 @@ func instanceStatusWithContext(ctx context.Context, t *testing.T, name string) (
 	}
 
 	return resp.OutputTrimmed(), nil
+}
+
+// errUnrecoverableInstanceState returns an error, if the given instance is in a
+// state, it can not recover from on its own. It returns nil, if the state can
+// not be determined, since this is most likely a transient condition.
+func errUnrecoverableInstanceState(ctx context.Context, t *testing.T, name string) error {
+	t.Helper()
+
+	status, err := instanceStatusWithContext(ctx, t, name)
+	if err != nil {
+		return nil
+	}
+
+	return errUnrecoverableStatus(name, status)
+}
+
+// errUnrecoverableStatus returns an error, if the given status is one, the
+// instance can not recover from on its own.
+func errUnrecoverableStatus(name string, status string) error {
+	if status != instanceStatusError {
+		return nil
+	}
+
+	return fmt.Errorf("Instance %[1]q is in status %[2]q and can not recover on its own. The cause is on the host, most likely an exhausted storage pool or filesystem, see the output of `incus info %[1]s --show-log` in the debug information below", name, status)
 }
 
 func mustInstanceStatus(ctx context.Context, t *testing.T, name string) string {
@@ -1283,6 +1345,10 @@ func onTestFailDebugOutput(t *testing.T, tmpDir string) func() {
 		err := os.WriteFile(debugOutputFilename, debugOutput.Bytes(), 0o600)
 		if err != nil {
 			t.Errorf("Failed to write debug output to %q: %v", debugOutputFilename, err)
+
+			// Writing fails, if the filesystem is full, so fall back to
+			// stdout.
+			fmt.Println(debugOutput.String())
 		}
 
 		operationsCenterJournalFilename := filepath.Join(tmpDir, fmt.Sprintf("operations-center_journal_%s.log", timestamp))

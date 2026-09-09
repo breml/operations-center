@@ -214,15 +214,14 @@ GO_TEST_TIMEOUT ?= 240m
 e2e-test: bld
 	@echo "go test flags: $(GO_TEST_RUN) (change by running 'make e2e-test GO_TEST_RUN=TestMyTest')"
 	mkdir -p $(OPERATIONS_CENTER_E2E_TEST_TMP_DIR)
-	OPERATIONS_CENTER_E2E_TEST=1 OPERATIONS_CENTER_E2E_TEST_NO_CLEANUP_ON_ERROR=1 OPERATIONS_CENTER_E2E_TEST_TMP_DIR=$(OPERATIONS_CENTER_E2E_TEST_TMP_DIR) $(GO) test ./e2e_tests/ -v -timeout $(GO_TEST_TIMEOUT) -count 1 -failfast -run "$(GO_TEST_RUN)" | tee $$OPERATIONS_CENTER_E2E_TEST_TMP_DIR/e2e_tests_$(EXECUTION_DATETIME).log
+	OPERATIONS_CENTER_E2E_TEST=1 OPERATIONS_CENTER_E2E_TEST_NO_CLEANUP_ON_ERROR=1 OPERATIONS_CENTER_E2E_TEST_TMP_DIR=$(OPERATIONS_CENTER_E2E_TEST_TMP_DIR) $(GO) test ./e2e_tests/ -v -timeout $(GO_TEST_TIMEOUT) -count 1 -failfast -run "$(GO_TEST_RUN)" | tee $(OPERATIONS_CENTER_E2E_TEST_TMP_DIR)/e2e_tests_$(EXECUTION_DATETIME).log
 
 .PHONY: e2e-test-cover
 e2e-test-cover: bld-cover
-	DATE=$(shell date +%F-%H-%M-%S)
 	@echo "go test flags: $(GO_TEST_RUN) (change by running 'make e2e-test-cover GO_TEST_RUN=TestMyTest')"
 	mkdir -p $(GOCOVERDIR)
-	OPERATIONS_CENTER_E2E_TEST=0 $(GO) test ./... -cover -coverpkg=./... -v -count 1 -args -test.gocoverdir="$(GOCOVERDIR)" | tee $$OPERATIONS_CENTER_E2E_TEST_TMP_DIR/e2e_tests_$(EXECUTION_DATETIME).log
-	OPERATIONS_CENTER_E2E_GOCOVERDIR=$(GOCOVERDIR) OPERATIONS_CENTER_E2E_TEST=1 OPERATIONS_CENTER_E2E_TEST_TMP_DIR=$(OPERATIONS_CENTER_E2E_TEST_TMP_DIR) $(GO) test ./e2e_tests/ -cover -coverpkg=./... -v -timeout $(GO_TEST_TIMEOUT) -count 1 -run "$(GO_TEST_RUN)" -args -test.gocoverdir="$(GOCOVERDIR)" | tee $$OPERATIONS_CENTER_E2E_TEST_TMP_DIR/e2e_tests_$(EXECUTION_DATETIME).log
+	OPERATIONS_CENTER_E2E_TEST=0 $(GO) test ./... -cover -coverpkg=./... -v -count 1 -args -test.gocoverdir="$(GOCOVERDIR)" | tee $(OPERATIONS_CENTER_E2E_TEST_TMP_DIR)/unit_tests_$(EXECUTION_DATETIME).log
+	OPERATIONS_CENTER_E2E_GOCOVERDIR=$(GOCOVERDIR) OPERATIONS_CENTER_E2E_TEST=1 OPERATIONS_CENTER_E2E_TEST_TMP_DIR=$(OPERATIONS_CENTER_E2E_TEST_TMP_DIR) $(GO) test ./e2e_tests/ -cover -coverpkg=./... -v -timeout $(GO_TEST_TIMEOUT) -count 1 -run "$(GO_TEST_RUN)" -args -test.gocoverdir="$(GOCOVERDIR)" | tee $(OPERATIONS_CENTER_E2E_TEST_TMP_DIR)/e2e_tests_$(EXECUTION_DATETIME).log
 	@echo ""
 	@echo "================= Coverage Report ================="
 	@$(GO) tool covdata percent -pkg $$($(GO) tool covdata pkglist -i $(GOCOVERDIR) | grep -vE '(middleware|mock|version|lifecycle)$$' | paste -sd,) -i=$(GOCOVERDIR) -o covdata-coverage.out | sed 's/%//' | sort -k3,3nr -k1,1 | column -t
@@ -249,12 +248,23 @@ clean-e2e-test: clean-e2e-test-soft
 clean-e2e-test-soft:
 	rm -rf $(OPERATIONS_CENTER_E2E_TEST_TMP_DIR)/image-downloads
 	rm -rf $(OPERATIONS_CENTER_E2E_TEST_TMP_DIR)/oidc-cli-config
+	rm -rf $(OPERATIONS_CENTER_E2E_TEST_TMP_DIR)/images
+	rm -rf $(OPERATIONS_CENTER_E2E_TEST_TMP_DIR)/coverage_*
+	# One preseeded ISO is created per provisioning token, so these accumulate
+	# over the runs. The ISO of Operations Center is kept, it is expensive to
+	# recreate and its name does not match this pattern.
+	rm -f $(OPERATIONS_CENTER_E2E_TEST_TMP_DIR)/IncusOS-preseeded-*.iso
 	incus remote remove incus-os-cluster || true
 	incus remote remove incus-os-cluster-after-factory-reset || true
 	incus remove --force IncusOS01 || true
 	incus remove --force IncusOS02 || true
 	incus remove --force IncusOS03 || true
 	incus remove --force IncusOS04 || true
+	# Remove the preseeded ISO storage volumes, which accumulate over the runs.
+	# This has to happen after the instances using them are gone.
+	for i in $$(incus storage volume list default -f json | jq -r '.[] | select(.name | test("IncusOS-.*")) | .name'); do \
+		incus storage volume delete default $$i || true; \
+	done
 	bin/operations-center.linux.amd64 provisioning cluster remove incus-os-cluster --force || true
 	bin/operations-center.linux.amd64 provisioning cluster remove incus-os-cluster-after-factory-reset --force || true
 	for i in $$(bin/operations-center.linux.amd64 provisioning server list -f json | jq -r '.[] | select(.server_type == "incus") | .name'); do \
@@ -284,3 +294,11 @@ clean-e2e-test-soft:
 		&& jq -e '.trusted_tls_client_cert_fingerprints | length > 0' $$f > /dev/null \
 		&& bin/operations-center.linux.amd64 system security edit < $$f ; } || true ; \
 	rm -f $$f
+
+# Removes the accumulated log files of previous test runs.
+.PHONY: clean-e2e-test-logs
+clean-e2e-test-logs:
+	rm -f $(OPERATIONS_CENTER_E2E_TEST_TMP_DIR)/e2e_tests_*.log
+	rm -f $(OPERATIONS_CENTER_E2E_TEST_TMP_DIR)/unit_tests_*.log
+	rm -f $(OPERATIONS_CENTER_E2E_TEST_TMP_DIR)/debug_output_*.log
+	rm -f $(OPERATIONS_CENTER_E2E_TEST_TMP_DIR)/*_journal_*.log

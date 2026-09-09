@@ -19,7 +19,7 @@ Use `-run` to run specific tests, e.g. `-run TestE2E/create_cluster`.
 
 Other environment variables that can be set to control the tests:
 
-* `OPERATIONS_CENTER_E2E_TEST_TMP_DIR`: Directory to use for temporary files. If not set, a temporary directory will be created and removed automatically. This is useful for developers, since artifacts (e.g. ISO files) are taken from the temporary directory if present, which speeds up the tests on subsequent runs.
+* `OPERATIONS_CENTER_E2E_TEST_TMP_DIR`: Directory to use for temporary files. If not set, a temporary directory is created below the home directory of the current user. It is *not* removed automatically. Setting this explicitly is recommended for developers, since artifacts (e.g. ISO files) are taken from the temporary directory if present, which speeds up the tests on subsequent runs.
 * `OPERATIONS_CENTER_E2E_TEST_DISK_SIZE`: Disk size to use for the IncusOS instances (default: "50GiB")
 * `OPERATIONS_CENTER_E2E_TEST_MEMORY_SIZE`: Memory size to use for the IncusOS instances (default: "4GiB")
 * `OPERATIONS_CENTER_E2E_TEST_CPU_COUNT`: CPU count to use for the IncusOS instances (default: "2")
@@ -38,8 +38,17 @@ Other environment variables that can be set to control the tests:
 A simple way to run the end to end tests as a developer is to create a VM using Incus
 and run the tests inside the VM.
 
-Make sure, that there is sufficient disk space available on the storage pool.
-Since the end to end tests use snapshots, it is recommended to use a ZFS storage pool.
+The tests create up to five virtual machines with a thin provisioned root disk of
+`OPERATIONS_CENTER_E2E_TEST_DISK_SIZE` (50 GiB by default) each, plus one ISO
+storage volume per Operations Center installation and per provisioning token.
+Plan for at least 150 GiB on the storage pool. Since the tests rely on thin
+provisioning, it is recommended to use a ZFS storage pool.
+
+> **Note:**
+> Running out of disk space during a run leaves the instances in `ERROR` state,
+> from which they do not recover. `incus info <instance> --show-log` is the only
+> place, where the cause is visible. Run `make clean-e2e-test-soft` between runs
+> to reclaim the artifacts, which accumulate over the runs.
 
 ```shell
 incus storage create zfs local-zfs
@@ -52,9 +61,9 @@ incus exec e2e -- bash
 ```
 
 > **Note:**
-> With more advanced setups, the performance of the tests, in particular the
-> snapshot creation and restoration, can be improved significantly. If this is
-> a concern, consider using ZFS for the storage volume.
+> With more advanced setups, the performance of the tests can be improved
+> significantly. If this is a concern, consider using ZFS for the storage
+> volume.
 >
 > Be aware, that using ZFS inside the VM requires installation of the specific
 > ZFS packages and DKMS modules.
@@ -162,8 +171,24 @@ make e2e-test-list
 
 ## Cleanup
 
+Remove everything, including the Operations Center VM and the temporary
+directory:
+
 ```shell
 make clean-e2e-test
+```
+
+Remove the test artifacts, but keep the Operations Center VM and its ISO, which
+are expensive to recreate. This is the one to run between test runs:
+
+```shell
+make clean-e2e-test-soft
+```
+
+Remove the log files accumulated by previous test runs:
+
+```shell
+make clean-e2e-test-logs
 ```
 
 ## Development
