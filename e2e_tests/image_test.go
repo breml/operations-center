@@ -124,7 +124,7 @@ func prepareServerAsOCImagesClient(ctx context.Context, t *testing.T, tmpDir str
 
 	mustRun(t, `../bin/operations-center.linux.%s provisioning server os system security edit %s: < %s`, cpuArch, name, configFilename)
 
-	mustRun(t, `incus restart %s`, name)
+	require.NoError(t, restartInstanceWithContext(ctx, t, name))
 
 	t.Logf("Waiting for %s to be ready after restart with updated CA certificates", name)
 	func() {

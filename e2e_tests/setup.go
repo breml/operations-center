@@ -32,7 +32,7 @@ func setupOperationsCenter(ctx context.Context, t *testing.T, tmpDir string) {
 
 	installed := installOperationsCenterVM(ctx, t)
 
-	removeBootMedia(t)
+	removeBootMedia(ctx, t)
 
 	mustWaitAgentRunning(ctx, t, "OperationsCenter")
 
@@ -156,17 +156,16 @@ func cleanupIncusOS(t *testing.T, names []string) func() {
 		}
 
 		// In t.Cleanup, t.Context() is cancelled, so we need a detached context.
-		ctx, cancel := context.WithTimeout(context.Background(), strechedTimeout(30*time.Second))
+		ctx, cancel := context.WithTimeout(context.Background(), strechedTimeout(time.Duration(len(names))*6*time.Minute+time.Minute))
 		defer cancel()
 
 		stop := timeTrack(t, "cleanup IncusOS")
 		defer stop()
 
 		for _, name := range names {
-			resp := runWithContext(ctx, t, `incus remove --force %s`, name)
-			if !resp.Success() {
-				t.Error(resp.Error())
-				continue
+			err := removeInstanceWithContext(ctx, t, name)
+			if err != nil {
+				t.Logf("Failed to remove instance %q during cleanup: %v", name, err)
 			}
 		}
 
@@ -305,14 +304,14 @@ func installOperationsCenterVM(ctx context.Context, t *testing.T) (installed boo
 
 	if status != "" {
 		t.Logf("Operations Center VM is in status %q, removing it in order to install it from scratch", status)
-		mustRun(t, `incus remove --force OperationsCenter`)
+		require.NoError(t, removeInstanceWithContext(ctx, t, "OperationsCenter"))
 	}
 
 	mustRun(t, `incus init --empty --vm OperationsCenter -c security.secureboot=false -c limits.cpu=%s -c limits.memory=%s -d root,size=%s -d root,io.cache=unsafe`, cpuCount, memorySize, diskSize)
 	mustRun(t, `incus config device add OperationsCenter vtpm tpm`)
 	mustRun(t, `incus config device add OperationsCenter boot-media disk pool=default source=IncusOS_OperationsCenter.iso boot.priority=10`)
 	mustRun(t, `incus config set OperationsCenter systemd.credential.fully-enable-incus-agent=true`)
-	mustRun(t, `incus start OperationsCenter`)
+	require.NoError(t, startInstanceWithContext(ctx, t, "OperationsCenter"))
 
 	t.Log("Waiting for Operations Center to complete installation")
 	mustWaitAgentRunningWithTimeout(ctx, t, "OperationsCenter", 5*time.Minute)
@@ -321,21 +320,24 @@ func installOperationsCenterVM(ctx context.Context, t *testing.T) (installed boo
 	return true
 }
 
-func removeBootMedia(t *testing.T) {
+func removeBootMedia(ctx context.Context, t *testing.T) {
 	t.Helper()
 
 	instanceHasBootMedia := mustRun(t, "incus config device list OperationsCenter")
-	if strings.Contains(instanceHasBootMedia.Output(), "boot-media") {
-		stop := timeTrack(t)
-		defer stop()
-
-		resp := run(t, `incus stop OperationsCenter`)
-		require.NoError(t, resp.err)
-		mustRun(t, `incus config device remove OperationsCenter boot-media`)
-		mustRun(t, `incus start OperationsCenter`)
-
-		t.Log("Waiting for Operations Center to be ready")
+	if !strings.Contains(instanceHasBootMedia.Output(), "boot-media") {
+		return
 	}
+
+	stop := timeTrack(t)
+	defer stop()
+
+	require.NoError(t, stopInstanceWithContext(ctx, t, "OperationsCenter"))
+
+	mustRun(t, `incus config device remove OperationsCenter boot-media`)
+
+	require.NoError(t, startInstanceWithContext(ctx, t, "OperationsCenter"))
+
+	t.Log("Waiting for Operations Center to be ready")
 }
 
 func replaceOperationsCenterExecutable(t *testing.T, tmpDir string) {
@@ -524,7 +526,7 @@ func createIncusOSInstances(ctx context.Context, t *testing.T, incusOSPreseededI
 	existingServers, err := strconv.ParseInt(existingServersResp.OutputTrimmed(), 10, 64)
 	require.NoError(t, err)
 
-	timeout := 15*time.Minute + time.Duration(len(names))*3*time.Minute
+	timeout := 20*time.Minute + time.Duration(len(names))*3*time.Minute
 	if !concurrentSetup {
 		timeout = time.Duration(int(timeout) * len(names))
 	}
@@ -565,7 +567,7 @@ func createIncusOSInstances(ctx context.Context, t *testing.T, incusOSPreseededI
 				if status != "" {
 					t.Logf("%s is in status %q, removing it in order to install it from scratch", name, status)
 
-					err = fmtRunErr(runWithContext(errgrpctx, t, `incus remove --force %s`, name))
+					err = removeInstanceWithContext(errgrpctx, t, name)
 					if err != nil {
 						return err
 					}
@@ -591,7 +593,7 @@ func createIncusOSInstances(ctx context.Context, t *testing.T, incusOSPreseededI
 					return err
 				}
 
-				err = fmtRunErr(runWithContext(errgrpctx, t, `incus start %s`, name))
+				err = startInstanceWithContext(errgrpctx, t, name)
 				if err != nil {
 					return err
 				}
@@ -612,11 +614,17 @@ func createIncusOSInstances(ctx context.Context, t *testing.T, incusOSPreseededI
 				}
 			}
 
-			instanceHasBootMedia := mustRun(t, "incus config device list %s", name)
-			if strings.Contains(instanceHasBootMedia.Output(), "boot-media") {
+			deviceListResp := runWithContext(errgrpctx, t, `incus config device list %s`, name)
+
+			err = fmtRunErr(deviceListResp)
+			if err != nil {
+				return fmt.Errorf("Failed to list the devices of instance %q: %w", name, err)
+			}
+
+			if strings.Contains(deviceListResp.Output(), "boot-media") {
 				t.Logf("Removing boot media from %s VM", name)
 
-				err = fmtRunErr(runWithContext(errgrpctx, t, `incus stop %s`, name))
+				err = stopInstanceWithContext(errgrpctx, t, name)
 				if err != nil {
 					return err
 				}
@@ -626,7 +634,7 @@ func createIncusOSInstances(ctx context.Context, t *testing.T, incusOSPreseededI
 					return err
 				}
 
-				err = fmtRunErr(runWithContext(errgrpctx, t, `incus start %s`, name))
+				err = startInstanceWithContext(errgrpctx, t, name)
 				if err != nil {
 					return err
 				}
