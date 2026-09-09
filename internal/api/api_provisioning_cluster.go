@@ -652,6 +652,10 @@ func (c *clusterHandler) clusterBulkUpdatePost(r *http.Request) response.Respons
 		return response.BadRequest(err)
 	}
 
+	if request.Arguments == nil {
+		return response.BadRequest(fmt.Errorf("Missing arguments for action %q", request.Action))
+	}
+
 	switch request.Action {
 	case api.ClusterBulkUpdateActionAddNetworkInterfaceVLANTags:
 		var vlanConfig struct {
