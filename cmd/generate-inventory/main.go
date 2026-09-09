@@ -77,13 +77,13 @@ var targets = []struct {
 		TargetFileType: FileTypeGo,
 	},
 	{
-		TemplateName:   "server_incus.gotmpl",
-		TargetName:     "internal/inventory/server/incus/{{ .Name }}_gen.go",
+		TemplateName:   "adapter_incus.gotmpl",
+		TargetName:     "internal/adapter/incus/inventory_{{ .Name }}_gen.go",
 		TargetFileType: FileTypeGo,
 	},
 	{
-		TemplateName:   "server_incus_test.gotmpl",
-		TargetName:     "internal/inventory/server/incus/{{ .Name }}_gen_test.go",
+		TemplateName:   "adapter_incus_test.gotmpl",
+		TargetName:     "internal/adapter/incus/inventory_{{ .Name }}_gen_test.go",
 		TargetFileType: FileTypeGo,
 	},
 	{
@@ -170,8 +170,8 @@ var globalTargets = []struct {
 		TargetName:   "internal/sql/dbschema/seed/config_gen.go",
 	},
 	{
-		TemplateName: "server_incus_testcases.gotmpl",
-		TargetName:   "internal/inventory/server/incus/client_testcases_gen_test.go",
+		TemplateName: "adapter_incus_testcases.gotmpl",
+		TargetName:   "internal/adapter/incus/inventory_client_testcases_gen_test.go",
 	},
 }
 

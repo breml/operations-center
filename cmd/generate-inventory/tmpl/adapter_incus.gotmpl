@@ -7,11 +7,11 @@ import (
 	incusapi "github.com/lxc/incus/v7/shared/api"
 
 	"github.com/FuturFusion/operations-center/internal/domain"
-  "github.com/FuturFusion/operations-center/internal/provisioning"
+	"github.com/FuturFusion/operations-center/internal/provisioning"
 )
 
-func (s serverClient) Get{{ .PluralName | pascalcase }}(ctx context.Context, endpoint provisioning.Endpoint {{- if .HasProjectFromParent }}, projectName string {{- end }}{{- if .HasParent }}, {{ .ParentName | camelcase }}Name string {{- end -}} ) ([]incusapi.{{ .ObjectType | pascalcase }}, error) {
-	client, err := s.getClient(ctx, endpoint)
+func (c Client) Get{{ .PluralName | pascalcase }}(ctx context.Context, endpoint provisioning.Endpoint {{- if .HasProjectFromParent }}, projectName string {{- end }}{{- if .HasParent }}, {{ .ParentName | camelcase }}Name string {{- end -}} ) ([]incusapi.{{ .ObjectType | pascalcase }}, error) {
+	client, err := c.getClient(ctx, endpoint)
 	if err != nil {
 		return nil, err
 	}
@@ -32,8 +32,8 @@ func (s serverClient) Get{{ .PluralName | pascalcase }}(ctx context.Context, end
 	return server{{ .PluralName | pascalcase }}, nil
 }
 
-func (s serverClient) Get{{ .Name | pascalcase }}ByName(ctx context.Context, endpoint provisioning.Endpoint, {{- if .HasProject }}projectName string, {{ end -}}{{- if .HasParent }}{{ .ParentName | camelcase }}Name string, {{ end -}} {{ .Name | camelcase }}Name string {{- range .ExtraAttributes }}, {{ $.Name | camelcase }}{{ .Name | pascalcase }} {{ .Type }}{{- end}}) (incusapi.{{ .ObjectType | pascalcase }}, error) {
-	client, err := s.getClient(ctx, endpoint)
+func (c Client) Get{{ .Name | pascalcase }}ByName(ctx context.Context, endpoint provisioning.Endpoint, {{- if .HasProject }}projectName string, {{ end -}}{{- if .HasParent }}{{ .ParentName | camelcase }}Name string, {{ end -}} {{ .Name | camelcase }}Name string {{- range .ExtraAttributes }}, {{ $.Name | camelcase }}{{ .Name | pascalcase }} {{ .Type }}{{- end}}) (incusapi.{{ .ObjectType | pascalcase }}, error) {
+	client, err := c.getClient(ctx, endpoint)
 	if err != nil {
 		return incusapi.{{ .ObjectType | pascalcase }}{}, err
 	}
