@@ -313,8 +313,11 @@ func mustWaitAgentRunningWithTimeout(ctx context.Context, t *testing.T, vm strin
 	mustWaitAgentRunning(timeoutCtx, t, vm, args...)
 }
 
+const agentWaitAttemptTimeout = 30 * time.Second
+
 // waitAgentRunningWithContext waits for the incus agent to be running inside
-// the given VM.
+// the given VM. It keeps waiting until the agent shows up or the context is
+// done. If the instance is found not to be running, it is started again.
 func waitAgentRunningWithContext(ctx context.Context, t *testing.T, vm string, args ...any) error {
 	t.Helper()
 
@@ -322,38 +325,68 @@ func waitAgentRunningWithContext(ctx context.Context, t *testing.T, vm string, a
 
 	vm = fmt.Sprintf(vm, args...)
 
-	timeoutSeconds := -1 // -1 disables the timeout for incus wait.
-	retries := 1
-	deadline, ok := ctx.Deadline()
-	if ok {
-		retries = 2
-		timeoutSeconds = (int(time.Until(deadline).Truncate(time.Second).Seconds()) - 2) / retries // Add 2 seconds of headroom.
-	}
+	deadline, hasDeadline := ctx.Deadline()
 
-	var resp cmdResponse
-	for range retries {
-		resp = runWithContext(ctx, t, `incus wait %s agent --timeout %d`, vm, timeoutSeconds)
+	lastStatus := ""
+	lastErr := ""
+
+	for attempt := 0; ctx.Err() == nil; attempt++ {
+		timeoutSeconds := -1 // -1 disables the timeout for incus wait.
+		if hasDeadline {
+			remaining := time.Until(deadline)
+			if remaining <= 0 {
+				break
+			}
+
+			timeoutSeconds = max(int(min(remaining, agentWaitAttemptTimeout).Seconds()), 1)
+		}
+
+		resp := runWithContext(ctx, t, `incus wait %s agent --timeout %d`, vm, timeoutSeconds)
 		if resp.Success() {
+			t.Logf("Agent running on %q after %s", vm, time.Since(start).String())
+
+			return nil
+		}
+
+		lastErr = resp.Error()
+
+		if ctx.Err() != nil {
 			break
 		}
 
-		t.Logf(`incus wait timeout, try restart for %s`, vm)
+		status, err := instanceStatusWithContext(ctx, t, vm)
+		if err == nil {
+			lastStatus = status
+		}
 
-		startErr := startInstanceWithContext(ctx, t, vm)
-		if startErr != nil {
-			t.Logf(`failed to re-start incus: %v`, startErr)
+		if lastStatus != instanceStatusRunning {
+			// The instance is not running, e.g. it shut down instead of
+			// rebooting after the installation, so start it again before
+			// waiting for the agent any further.
+			t.Logf("Instance %s is in status %q, try restart", vm, lastStatus)
+
+			startErr := startInstanceWithContext(ctx, t, vm)
+			if startErr != nil {
+				t.Logf(`failed to re-start incus: %v`, startErr)
+			}
+		} else if attempt%10 == 0 {
+			t.Logf("Waiting %s for agent on %s, instance status %q", time.Since(start).Truncate(time.Second), vm, lastStatus)
+		}
+
+		select {
+		case <-ctx.Done():
+
+		case <-time.After(1 * time.Second):
 		}
 	}
 
-	if !resp.Success() {
-		logVMDebugInfo(t, vm)
+	logVMDebugInfo(t, vm)
 
-		return fmt.Errorf("Failed to wait for incus agent on %q after %s: %s", vm, time.Since(start).String(), resp.Error())
+	if lastErr == "" {
+		lastErr = fmt.Sprintf("context done: %v", ctx.Err())
 	}
 
-	t.Logf("Agent running on %q after %s", vm, time.Since(start).String())
-
-	return nil
+	return fmt.Errorf("Failed to wait for incus agent on %q after %s, last instance status %q: %s", vm, time.Since(start).String(), lastStatus, lastErr)
 }
 
 // mustWaitExpectedLog waits for the wanted content to appear in the logs
