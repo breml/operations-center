@@ -25,7 +25,7 @@ import (
 	incusTLS "github.com/lxc/incus/v7/shared/tls"
 	"golang.org/x/sync/errgroup"
 
-	provisioningIncusAdapter "github.com/FuturFusion/operations-center/internal/adapter/incus"
+	incusAdapter "github.com/FuturFusion/operations-center/internal/adapter/incus"
 	"github.com/FuturFusion/operations-center/internal/api/listener"
 	config "github.com/FuturFusion/operations-center/internal/config/daemon"
 	"github.com/FuturFusion/operations-center/internal/domain"
@@ -42,7 +42,6 @@ import (
 	inventoryRepoMiddleware "github.com/FuturFusion/operations-center/internal/inventory/repo/middleware"
 	inventorySqlite "github.com/FuturFusion/operations-center/internal/inventory/repo/sqlite"
 	inventoryEntities "github.com/FuturFusion/operations-center/internal/inventory/repo/sqlite/entities"
-	inventoryIncusAdapter "github.com/FuturFusion/operations-center/internal/inventory/server/incus"
 	serverMiddleware "github.com/FuturFusion/operations-center/internal/inventory/server/middleware"
 	"github.com/FuturFusion/operations-center/internal/lifecycle"
 	"github.com/FuturFusion/operations-center/internal/provisioning"
@@ -248,11 +247,11 @@ func (d *Daemon) Start(ctx context.Context) error {
 		}()
 	})
 
-	client := provisioningIncusAdapter.New(
+	client := incusAdapter.New(
 		d.clientCertificate,
 		d.clientKey,
-		provisioningIncusAdapter.WithEnvironment(d.env),
-		provisioningIncusAdapter.WithSkipGetServer(true),
+		incusAdapter.WithEnvironment(d.env),
+		incusAdapter.WithSkipGetServer(true),
 	)
 
 	loader := incusScriptlet.NewLoader()
@@ -1036,7 +1035,7 @@ func (d *Daemon) setupAPIRoutes(
 	// or clusters.
 	serverClientProvider := serverMiddleware.NewServerClientWithSlog(
 		serverMiddleware.NewServerClientWithErrorWrapper(
-			inventoryIncusAdapter.New(
+			incusAdapter.New(
 				d.clientCertificate,
 				d.clientKey,
 			),
