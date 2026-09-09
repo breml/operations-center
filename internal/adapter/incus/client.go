@@ -24,22 +24,45 @@ import (
 	"github.com/FuturFusion/operations-center/shared/api"
 )
 
-type environment interface {
+// Environment provides access to the local Incus daemon unix socket.
+type Environment interface {
 	GetUnixSocket() string
 }
 
-type client struct {
-	clientCert string
-	clientKey  string
-	clientCA   string
-	env        environment
+type Client struct {
+	clientCert    string
+	clientKey     string
+	clientCA      string
+	env           Environment
+	skipGetServer bool
 }
 
 var (
-	_ provisioning.ServerClientPort  = client{}
-	_ provisioning.ClusterClientPort = client{}
-	_ provisioning.TokenClientPort   = client{}
+	_ provisioning.ServerClientPort  = Client{}
+	_ provisioning.ClusterClientPort = Client{}
+	_ provisioning.TokenClientPort   = Client{}
 )
+
+// Option configures a Client.
+type Option func(*Client)
+
+// WithEnvironment provides the runtime environment, which enables connecting to
+// the local Incus daemon through its unix socket.
+func WithEnvironment(env Environment) Option {
+	return func(c *Client) {
+		c.env = env
+	}
+}
+
+// WithSkipGetServer skips the request for the server information, which is
+// otherwise performed while establishing a connection. Note that HasExtension
+// depends on this information and therefore always reports false, if the
+// request is skipped.
+func WithSkipGetServer(skipGetServer bool) Option {
+	return func(c *Client) {
+		c.skipGetServer = skipGetServer
+	}
+}
 
 type transportWrapper struct {
 	transport *http.Transport
@@ -53,15 +76,20 @@ func (t *transportWrapper) RoundTrip(req *http.Request) (*http.Response, error) 
 	return t.transport.RoundTrip(req)
 }
 
-func New(clientCert string, clientKey string, env environment) client {
-	return client{
+func New(clientCert string, clientKey string, opts ...Option) Client {
+	c := Client{
 		clientCert: clientCert,
 		clientKey:  clientKey,
-		env:        env,
 	}
+
+	for _, opt := range opts {
+		opt(&c)
+	}
+
+	return c
 }
 
-func (c client) getClient(ctx context.Context, endpoint provisioning.Endpoint) (incus.InstanceServer, error) {
+func (c Client) getClient(ctx context.Context, endpoint provisioning.Endpoint) (incus.InstanceServer, error) {
 	if transaction.IsActive(ctx) {
 		slog.WarnContext(ctx, "Incus API call inside of a transaction", logger.AddStacktrace())
 	}
@@ -73,6 +101,10 @@ func (c client) getClient(ctx context.Context, endpoint provisioning.Endpoint) (
 
 	// If the provisioning.ServerSelf endpoint is used, connect through unix socket.
 	if endpoint.GetConnectionURL() == provisioning.ServerSelf.ConnectionURL {
+		if c.env == nil {
+			return nil, fmt.Errorf("Failed to connect to %q: no environment configured", provisioning.ServerSelf.ConnectionURL)
+		}
+
 		return incus.ConnectIncusUnix(c.env.GetUnixSocket(), &incus.ConnectionArgs{})
 	}
 
@@ -81,7 +113,7 @@ func (c client) getClient(ctx context.Context, endpoint provisioning.Endpoint) (
 		TLSClientKey:  c.clientKey,
 		TLSServerCert: endpoint.GetCertificate(),
 		TLSCA:         c.clientCA,
-		SkipGetServer: true,
+		SkipGetServer: c.skipGetServer,
 		TransportWrapper: func(t *http.Transport) incus.HTTPTransporter {
 			if endpoint.GetCertificate() == "" {
 				t.TLSClientConfig.ServerName = serverName
@@ -99,7 +131,7 @@ func (c client) getClient(ctx context.Context, endpoint provisioning.Endpoint) (
 	return incus.ConnectIncusWithContext(ctx, endpoint.GetConnectionURL(), args)
 }
 
-func (c client) Ping(ctx context.Context, endpoint provisioning.Endpoint) error {
+func (c Client) Ping(ctx context.Context, endpoint provisioning.Endpoint) error {
 	client, err := c.getClient(ctx, endpoint)
 	if err != nil {
 		return err
@@ -113,7 +145,7 @@ func (c client) Ping(ctx context.Context, endpoint provisioning.Endpoint) error 
 	return nil
 }
 
-func (c client) IsReady(ctx context.Context, server provisioning.Server) error {
+func (c Client) IsReady(ctx context.Context, server provisioning.Server) error {
 	client, err := c.getClient(ctx, server)
 	if err != nil {
 		return err
@@ -154,7 +186,7 @@ func (c client) IsReady(ctx context.Context, server provisioning.Server) error {
 	return nil
 }
 
-func (c client) GetResources(ctx context.Context, endpoint provisioning.Endpoint) (api.HardwareData, error) {
+func (c Client) GetResources(ctx context.Context, endpoint provisioning.Endpoint) (api.HardwareData, error) {
 	client, err := c.getClient(ctx, endpoint)
 	if err != nil {
 		return api.HardwareData{}, err
@@ -178,7 +210,7 @@ func (c client) GetResources(ctx context.Context, endpoint provisioning.Endpoint
 	}, nil
 }
 
-func (c client) GetOSData(ctx context.Context, endpoint provisioning.Endpoint) (api.OSData, error) {
+func (c Client) GetOSData(ctx context.Context, endpoint provisioning.Endpoint) (api.OSData, error) {
 	client, err := c.getClient(ctx, endpoint)
 	if err != nil {
 		return api.OSData{}, err
@@ -226,7 +258,7 @@ func (c client) GetOSData(ctx context.Context, endpoint provisioning.Endpoint) (
 	}, nil
 }
 
-func (c client) GetVersionData(ctx context.Context, server provisioning.Server) (api.ServerVersionData, error) {
+func (c Client) GetVersionData(ctx context.Context, server provisioning.Server) (api.ServerVersionData, error) {
 	client, err := c.getClient(ctx, server)
 	if err != nil {
 		return api.ServerVersionData{}, err
@@ -334,7 +366,7 @@ func (c client) GetVersionData(ctx context.Context, server provisioning.Server) 
 	}, nil
 }
 
-func (c client) GetServerType(ctx context.Context, endpoint provisioning.Endpoint) (api.ServerType, error) {
+func (c Client) GetServerType(ctx context.Context, endpoint provisioning.Endpoint) (api.ServerType, error) {
 	client, err := c.getClient(ctx, endpoint)
 	if err != nil {
 		return api.ServerTypeUnknown, err
@@ -372,7 +404,7 @@ func (c client) GetServerType(ctx context.Context, endpoint provisioning.Endpoin
 	return api.ServerTypeUnknown, fmt.Errorf("Server %q (%s) did not return any known server type defining application (%v)", endpoint.GetName(), endpoint.GetConnectionURL(), applications)
 }
 
-func (c client) GetNodeSpecificConfigKeys(ctx context.Context, endpoint provisioning.Endpoint) (map[string]map[string]bool, error) {
+func (c Client) GetNodeSpecificConfigKeys(ctx context.Context, endpoint provisioning.Endpoint) (map[string]map[string]bool, error) {
 	client, err := c.getClient(ctx, endpoint)
 	if err != nil {
 		return nil, err
@@ -410,7 +442,7 @@ func (c client) GetNodeSpecificConfigKeys(ctx context.Context, endpoint provisio
 	return nodeSpecificConfigsMap, nil
 }
 
-func (c client) GetNetworkConfig(ctx context.Context, server provisioning.Server) (provisioning.ServerSystemNetwork, error) {
+func (c Client) GetNetworkConfig(ctx context.Context, server provisioning.Server) (provisioning.ServerSystemNetwork, error) {
 	client, err := c.getClient(ctx, server)
 	if err != nil {
 		return provisioning.ServerSystemNetwork{}, err
@@ -430,7 +462,7 @@ func (c client) GetNetworkConfig(ctx context.Context, server provisioning.Server
 	return networkConfig, nil
 }
 
-func (c client) UpdateNetworkConfig(ctx context.Context, server provisioning.Server) error {
+func (c Client) UpdateNetworkConfig(ctx context.Context, server provisioning.Server) error {
 	client, err := c.getClient(ctx, server)
 	if err != nil {
 		return err
@@ -444,7 +476,7 @@ func (c client) UpdateNetworkConfig(ctx context.Context, server provisioning.Ser
 	return nil
 }
 
-func (c client) GetStorageConfig(ctx context.Context, server provisioning.Server) (provisioning.ServerSystemStorage, error) {
+func (c Client) GetStorageConfig(ctx context.Context, server provisioning.Server) (provisioning.ServerSystemStorage, error) {
 	client, err := c.getClient(ctx, server)
 	if err != nil {
 		return provisioning.ServerSystemStorage{}, err
@@ -464,7 +496,7 @@ func (c client) GetStorageConfig(ctx context.Context, server provisioning.Server
 	return storageConfig, nil
 }
 
-func (c client) UpdateStorageConfig(ctx context.Context, server provisioning.Server) error {
+func (c Client) UpdateStorageConfig(ctx context.Context, server provisioning.Server) error {
 	client, err := c.getClient(ctx, server)
 	if err != nil {
 		return err
@@ -478,7 +510,7 @@ func (c client) UpdateStorageConfig(ctx context.Context, server provisioning.Ser
 	return nil
 }
 
-func (c client) GetProviderConfig(ctx context.Context, server provisioning.Server) (provisioning.ServerSystemProvider, error) {
+func (c Client) GetProviderConfig(ctx context.Context, server provisioning.Server) (provisioning.ServerSystemProvider, error) {
 	client, err := c.getClient(ctx, server)
 	if err != nil {
 		return incusosapi.SystemProvider{}, err
@@ -498,7 +530,7 @@ func (c client) GetProviderConfig(ctx context.Context, server provisioning.Serve
 	return providerConfig, nil
 }
 
-func (c client) UpdateProviderConfig(ctx context.Context, server provisioning.Server, providerConfig provisioning.ServerSystemProvider) error {
+func (c Client) UpdateProviderConfig(ctx context.Context, server provisioning.Server, providerConfig provisioning.ServerSystemProvider) error {
 	client, err := c.getClient(ctx, server)
 	if err != nil {
 		return err
@@ -512,7 +544,7 @@ func (c client) UpdateProviderConfig(ctx context.Context, server provisioning.Se
 	return nil
 }
 
-func (c client) GetUpdateConfig(ctx context.Context, server provisioning.Server) (provisioning.ServerSystemUpdate, error) {
+func (c Client) GetUpdateConfig(ctx context.Context, server provisioning.Server) (provisioning.ServerSystemUpdate, error) {
 	client, err := c.getClient(ctx, server)
 	if err != nil {
 		return incusosapi.SystemUpdate{}, err
@@ -532,7 +564,7 @@ func (c client) GetUpdateConfig(ctx context.Context, server provisioning.Server)
 	return updateConfig, nil
 }
 
-func (c client) UpdateUpdateConfig(ctx context.Context, server provisioning.Server, updateConfig provisioning.ServerSystemUpdate) error {
+func (c Client) UpdateUpdateConfig(ctx context.Context, server provisioning.Server, updateConfig provisioning.ServerSystemUpdate) error {
 	client, err := c.getClient(ctx, server)
 	if err != nil {
 		return err
@@ -546,7 +578,7 @@ func (c client) UpdateUpdateConfig(ctx context.Context, server provisioning.Serv
 	return nil
 }
 
-func (c client) Evacuate(ctx context.Context, server provisioning.Server, callback func(ctx context.Context, err error)) error {
+func (c Client) Evacuate(ctx context.Context, server provisioning.Server, callback func(ctx context.Context, err error)) error {
 	client, err := c.getClient(ctx, server)
 	if err != nil {
 		return err
@@ -570,7 +602,7 @@ func (c client) Evacuate(ctx context.Context, server provisioning.Server, callba
 	return nil
 }
 
-func (c client) TriggerSystemAction(ctx context.Context, server provisioning.Server, resource string, action string, body any) error {
+func (c Client) TriggerSystemAction(ctx context.Context, server provisioning.Server, resource string, action string, body any) error {
 	if strings.Contains(resource, "/") || strings.Contains(action, "/") {
 		return fmt.Errorf(`Resource and action must not contain forward slashes ("/")`)
 	}
@@ -592,7 +624,7 @@ func (c client) TriggerSystemAction(ctx context.Context, server provisioning.Ser
 	return nil
 }
 
-func (c client) Poweroff(ctx context.Context, server provisioning.Server) error {
+func (c Client) Poweroff(ctx context.Context, server provisioning.Server) error {
 	client, err := c.getClient(ctx, server)
 	if err != nil {
 		return err
@@ -606,7 +638,7 @@ func (c client) Poweroff(ctx context.Context, server provisioning.Server) error 
 	return nil
 }
 
-func (c client) Reboot(ctx context.Context, server provisioning.Server) error {
+func (c Client) Reboot(ctx context.Context, server provisioning.Server) error {
 	client, err := c.getClient(ctx, server)
 	if err != nil {
 		return err
@@ -620,7 +652,7 @@ func (c client) Reboot(ctx context.Context, server provisioning.Server) error {
 	return nil
 }
 
-func (c client) Restore(ctx context.Context, server provisioning.Server, restoreModeSkip bool, callback func(ctx context.Context, err error)) error {
+func (c Client) Restore(ctx context.Context, server provisioning.Server, restoreModeSkip bool, callback func(ctx context.Context, err error)) error {
 	client, err := c.getClient(ctx, server)
 	if err != nil {
 		return err
@@ -649,7 +681,7 @@ func (c client) Restore(ctx context.Context, server provisioning.Server, restore
 	return nil
 }
 
-func (c client) UpdateOS(ctx context.Context, server provisioning.Server) error {
+func (c Client) UpdateOS(ctx context.Context, server provisioning.Server) error {
 	client, err := c.getClient(ctx, server)
 	if err != nil {
 		return err
@@ -663,7 +695,7 @@ func (c client) UpdateOS(ctx context.Context, server provisioning.Server) error 
 	return nil
 }
 
-func (c client) AddApplication(ctx context.Context, server provisioning.Server, application string) error {
+func (c Client) AddApplication(ctx context.Context, server provisioning.Server, application string) error {
 	client, err := c.getClient(ctx, server)
 	if err != nil {
 		return err
@@ -679,7 +711,7 @@ func (c client) AddApplication(ctx context.Context, server provisioning.Server, 
 	return nil
 }
 
-func (c client) RestartApplication(ctx context.Context, server provisioning.Server, application string) error {
+func (c Client) RestartApplication(ctx context.Context, server provisioning.Server, application string) error {
 	client, err := c.getClient(ctx, server)
 	if err != nil {
 		return err
@@ -693,7 +725,7 @@ func (c client) RestartApplication(ctx context.Context, server provisioning.Serv
 	return nil
 }
 
-func (c client) GetSystem(ctx context.Context, server provisioning.Server, resource string) (map[string]any, error) {
+func (c Client) GetSystem(ctx context.Context, server provisioning.Server, resource string) (map[string]any, error) {
 	if strings.Contains(resource, "/") {
 		return nil, fmt.Errorf(`Resource name must not contain forward slashes ("/")`)
 	}
@@ -717,7 +749,7 @@ func (c client) GetSystem(ctx context.Context, server provisioning.Server, resou
 	return config, nil
 }
 
-func (c client) UpdateSystem(ctx context.Context, server provisioning.Server, resource string, config any) error {
+func (c Client) UpdateSystem(ctx context.Context, server provisioning.Server, resource string, config any) error {
 	if strings.Contains(resource, "/") {
 		return fmt.Errorf(`Resource name must not contain forward slashes ("/")`)
 	}
@@ -735,7 +767,7 @@ func (c client) UpdateSystem(ctx context.Context, server provisioning.Server, re
 	return nil
 }
 
-func (c client) GetSystemKernel(ctx context.Context, server provisioning.Server) (provisioning.ServerSystemKernel, error) {
+func (c Client) GetSystemKernel(ctx context.Context, server provisioning.Server) (provisioning.ServerSystemKernel, error) {
 	client, err := c.getClient(ctx, server)
 	if err != nil {
 		return provisioning.ServerSystemKernel{}, err
@@ -755,7 +787,7 @@ func (c client) GetSystemKernel(ctx context.Context, server provisioning.Server)
 	return kernelConfig, nil
 }
 
-func (c client) UpdateSystemKernel(ctx context.Context, server provisioning.Server, config provisioning.ServerSystemKernel) error {
+func (c Client) UpdateSystemKernel(ctx context.Context, server provisioning.Server, config provisioning.ServerSystemKernel) error {
 	client, err := c.getClient(ctx, server)
 	if err != nil {
 		return err
@@ -769,7 +801,7 @@ func (c client) UpdateSystemKernel(ctx context.Context, server provisioning.Serv
 	return nil
 }
 
-func (c client) GetSystemLogging(ctx context.Context, server provisioning.Server) (provisioning.ServerSystemLogging, error) {
+func (c Client) GetSystemLogging(ctx context.Context, server provisioning.Server) (provisioning.ServerSystemLogging, error) {
 	client, err := c.getClient(ctx, server)
 	if err != nil {
 		return provisioning.ServerSystemLogging{}, err
@@ -789,7 +821,7 @@ func (c client) GetSystemLogging(ctx context.Context, server provisioning.Server
 	return loggingConfig, nil
 }
 
-func (c client) UpdateSystemLogging(ctx context.Context, server provisioning.Server, config provisioning.ServerSystemLogging) error {
+func (c Client) UpdateSystemLogging(ctx context.Context, server provisioning.Server, config provisioning.ServerSystemLogging) error {
 	client, err := c.getClient(ctx, server)
 	if err != nil {
 		return err
@@ -803,7 +835,7 @@ func (c client) UpdateSystemLogging(ctx context.Context, server provisioning.Ser
 	return nil
 }
 
-func (c client) GetOSService(ctx context.Context, server provisioning.Server, name string) (map[string]any, error) {
+func (c Client) GetOSService(ctx context.Context, server provisioning.Server, name string) (map[string]any, error) {
 	client, err := c.getClient(ctx, server)
 	if err != nil {
 		return nil, err
@@ -826,7 +858,7 @@ func (c client) GetOSService(ctx context.Context, server provisioning.Server, na
 	return serviceConfig, nil
 }
 
-func (c client) GetOSServiceCeph(ctx context.Context, server provisioning.Server) (incusosapi.ServiceCeph, error) {
+func (c Client) GetOSServiceCeph(ctx context.Context, server provisioning.Server) (incusosapi.ServiceCeph, error) {
 	client, err := c.getClient(ctx, server)
 	if err != nil {
 		return incusosapi.ServiceCeph{}, err
@@ -847,7 +879,7 @@ func (c client) GetOSServiceCeph(ctx context.Context, server provisioning.Server
 	return serviceConfig, nil
 }
 
-func (c client) GetOSServiceISCSI(ctx context.Context, server provisioning.Server) (incusosapi.ServiceISCSI, error) {
+func (c Client) GetOSServiceISCSI(ctx context.Context, server provisioning.Server) (incusosapi.ServiceISCSI, error) {
 	client, err := c.getClient(ctx, server)
 	if err != nil {
 		return incusosapi.ServiceISCSI{}, err
@@ -868,7 +900,7 @@ func (c client) GetOSServiceISCSI(ctx context.Context, server provisioning.Serve
 	return serviceConfig, nil
 }
 
-func (c client) GetOSServiceLinstor(ctx context.Context, server provisioning.Server) (incusosapi.ServiceLinstor, error) {
+func (c Client) GetOSServiceLinstor(ctx context.Context, server provisioning.Server) (incusosapi.ServiceLinstor, error) {
 	client, err := c.getClient(ctx, server)
 	if err != nil {
 		return incusosapi.ServiceLinstor{}, err
@@ -889,7 +921,7 @@ func (c client) GetOSServiceLinstor(ctx context.Context, server provisioning.Ser
 	return serviceConfig, nil
 }
 
-func (c client) GetOSServiceLVM(ctx context.Context, server provisioning.Server) (incusosapi.ServiceLVM, error) {
+func (c Client) GetOSServiceLVM(ctx context.Context, server provisioning.Server) (incusosapi.ServiceLVM, error) {
 	client, err := c.getClient(ctx, server)
 	if err != nil {
 		return incusosapi.ServiceLVM{}, err
@@ -910,7 +942,7 @@ func (c client) GetOSServiceLVM(ctx context.Context, server provisioning.Server)
 	return serviceConfig, nil
 }
 
-func (c client) GetOSServiceMultipath(ctx context.Context, server provisioning.Server) (incusosapi.ServiceMultipath, error) {
+func (c Client) GetOSServiceMultipath(ctx context.Context, server provisioning.Server) (incusosapi.ServiceMultipath, error) {
 	client, err := c.getClient(ctx, server)
 	if err != nil {
 		return incusosapi.ServiceMultipath{}, err
@@ -931,7 +963,7 @@ func (c client) GetOSServiceMultipath(ctx context.Context, server provisioning.S
 	return serviceConfig, nil
 }
 
-func (c client) GetOSServiceNVME(ctx context.Context, server provisioning.Server) (incusosapi.ServiceNVME, error) {
+func (c Client) GetOSServiceNVME(ctx context.Context, server provisioning.Server) (incusosapi.ServiceNVME, error) {
 	client, err := c.getClient(ctx, server)
 	if err != nil {
 		return incusosapi.ServiceNVME{}, err
@@ -952,7 +984,7 @@ func (c client) GetOSServiceNVME(ctx context.Context, server provisioning.Server
 	return serviceConfig, nil
 }
 
-func (c client) GetOSServiceOVN(ctx context.Context, server provisioning.Server) (incusosapi.ServiceOVN, error) {
+func (c Client) GetOSServiceOVN(ctx context.Context, server provisioning.Server) (incusosapi.ServiceOVN, error) {
 	client, err := c.getClient(ctx, server)
 	if err != nil {
 		return incusosapi.ServiceOVN{}, err
@@ -973,7 +1005,7 @@ func (c client) GetOSServiceOVN(ctx context.Context, server provisioning.Server)
 	return serviceConfig, nil
 }
 
-func (c client) GetOSServiceTailscale(ctx context.Context, server provisioning.Server) (incusosapi.ServiceTailscale, error) {
+func (c Client) GetOSServiceTailscale(ctx context.Context, server provisioning.Server) (incusosapi.ServiceTailscale, error) {
 	client, err := c.getClient(ctx, server)
 	if err != nil {
 		return incusosapi.ServiceTailscale{}, err
@@ -994,7 +1026,7 @@ func (c client) GetOSServiceTailscale(ctx context.Context, server provisioning.S
 	return serviceConfig, nil
 }
 
-func (c client) GetOSServiceUSBIP(ctx context.Context, server provisioning.Server) (incusosapi.ServiceUSBIP, error) {
+func (c Client) GetOSServiceUSBIP(ctx context.Context, server provisioning.Server) (incusosapi.ServiceUSBIP, error) {
 	client, err := c.getClient(ctx, server)
 	if err != nil {
 		return incusosapi.ServiceUSBIP{}, err
@@ -1015,7 +1047,7 @@ func (c client) GetOSServiceUSBIP(ctx context.Context, server provisioning.Serve
 	return serviceConfig, nil
 }
 
-func (c client) UpdateOSService(ctx context.Context, server provisioning.Server, name string, config any) error {
+func (c Client) UpdateOSService(ctx context.Context, server provisioning.Server, name string, config any) error {
 	client, err := c.getClient(ctx, server)
 	if err != nil {
 		return err
@@ -1041,7 +1073,7 @@ func (c client) UpdateOSService(ctx context.Context, server provisioning.Server,
 	return nil
 }
 
-func (c client) SetServerConfig(ctx context.Context, endpoint provisioning.Endpoint, config map[string]string) error {
+func (c Client) SetServerConfig(ctx context.Context, endpoint provisioning.Endpoint, config map[string]string) error {
 	client, err := c.getClient(ctx, endpoint)
 	if err != nil {
 		return err
@@ -1066,7 +1098,7 @@ func (c client) SetServerConfig(ctx context.Context, endpoint provisioning.Endpo
 	return nil
 }
 
-func (c client) EnableCluster(ctx context.Context, server provisioning.Server) (clusterCertificate string, _ error) {
+func (c Client) EnableCluster(ctx context.Context, server provisioning.Server) (clusterCertificate string, _ error) {
 	client, err := c.getClient(ctx, server)
 	if err != nil {
 		return "", err
@@ -1102,7 +1134,7 @@ func (c client) EnableCluster(ctx context.Context, server provisioning.Server) (
 	return clusterCertificate, nil
 }
 
-func (c client) GetClusterNodeNames(ctx context.Context, endpoint provisioning.Endpoint) ([]string, error) {
+func (c Client) GetClusterNodeNames(ctx context.Context, endpoint provisioning.Endpoint) ([]string, error) {
 	client, err := c.getClient(ctx, endpoint)
 	if err != nil {
 		return nil, err
@@ -1116,7 +1148,7 @@ func (c client) GetClusterNodeNames(ctx context.Context, endpoint provisioning.E
 	return nodeNames, nil
 }
 
-func (c client) GetClusterJoinToken(ctx context.Context, endpoint provisioning.Endpoint, memberName string) (joinToken string, _ error) {
+func (c Client) GetClusterJoinToken(ctx context.Context, endpoint provisioning.Endpoint, memberName string) (joinToken string, _ error) {
 	client, err := c.getClient(ctx, endpoint)
 	if err != nil {
 		return "", err
@@ -1138,7 +1170,7 @@ func (c client) GetClusterJoinToken(ctx context.Context, endpoint provisioning.E
 	return token.String(), nil
 }
 
-func (c client) JoinCluster(ctx context.Context, server provisioning.Server, joinToken string, serverAddressOfClusterRole string, endpoint provisioning.Endpoint, config []api.ClusterMemberConfigKey) error {
+func (c Client) JoinCluster(ctx context.Context, server provisioning.Server, joinToken string, serverAddressOfClusterRole string, endpoint provisioning.Endpoint, config []api.ClusterMemberConfigKey) error {
 	client, err := c.getClient(ctx, server)
 	if err != nil {
 		return err
@@ -1170,7 +1202,7 @@ func (c client) JoinCluster(ctx context.Context, server provisioning.Server, joi
 	return nil
 }
 
-func (c client) UpdateClusterCertificate(ctx context.Context, endpoint provisioning.Endpoint, certificatePEM string, keyPEM string) error {
+func (c Client) UpdateClusterCertificate(ctx context.Context, endpoint provisioning.Endpoint, certificatePEM string, keyPEM string) error {
 	client, err := c.getClient(ctx, endpoint)
 	if err != nil {
 		return err
@@ -1182,7 +1214,7 @@ func (c client) UpdateClusterCertificate(ctx context.Context, endpoint provision
 	}, "")
 }
 
-func (c client) SystemFactoryReset(ctx context.Context, endpoint provisioning.Endpoint, allowTPMResetFailure bool, seedConfig provisioning.TokenImageSeedConfigs, providerConfig api.TokenProviderConfig) error {
+func (c Client) SystemFactoryReset(ctx context.Context, endpoint provisioning.Endpoint, allowTPMResetFailure bool, seedConfig provisioning.TokenImageSeedConfigs, providerConfig api.TokenProviderConfig) error {
 	client, err := c.getClient(ctx, endpoint)
 	if err != nil {
 		return err
@@ -1221,7 +1253,7 @@ func (c client) SystemFactoryReset(ctx context.Context, endpoint provisioning.En
 	return nil
 }
 
-func (c client) GetSecurityConfig(ctx context.Context, server provisioning.Server) (provisioning.ServerSystemSecurity, error) {
+func (c Client) GetSecurityConfig(ctx context.Context, server provisioning.Server) (provisioning.ServerSystemSecurity, error) {
 	client, err := c.getClient(ctx, server)
 	if err != nil {
 		return provisioning.ServerSystemSecurity{}, err
@@ -1241,7 +1273,7 @@ func (c client) GetSecurityConfig(ctx context.Context, server provisioning.Serve
 	return securityConfig, nil
 }
 
-func (c client) SubscribeLifecycleEvents(ctx context.Context, endpoint provisioning.Endpoint) (chan domain.LifecycleEvent, chan error, error) {
+func (c Client) SubscribeLifecycleEvents(ctx context.Context, endpoint provisioning.Endpoint) (chan domain.LifecycleEvent, chan error, error) {
 	client, err := c.getClient(ctx, endpoint)
 	if err != nil {
 		return nil, nil, err
@@ -1411,7 +1443,7 @@ func firstNonEmpty(candidates ...string) string {
 	return ""
 }
 
-func (c client) IncusClient(ctx context.Context, endpoint provisioning.Endpoint) (incus.InstanceServer, error) {
+func (c Client) IncusClient(ctx context.Context, endpoint provisioning.Endpoint) (incus.InstanceServer, error) {
 	client, err := c.getClient(ctx, endpoint)
 	if err != nil {
 		return nil, err

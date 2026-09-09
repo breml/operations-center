@@ -7,8 +7,8 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/FuturFusion/operations-center/internal/provisioning"
 	"github.com/FuturFusion/operations-center/internal/adapter/incus"
+	"github.com/FuturFusion/operations-center/internal/provisioning"
 )
 
 func Test(t *testing.T) {
@@ -25,7 +25,7 @@ func Test(t *testing.T) {
 			server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
 			t.Cleanup(server.Close)
 
-			c := incus.New("", "", nil)
+			c := incus.New("", "", incus.WithSkipGetServer(true))
 			cert, err := c.GetRemoteCertificate(t.Context(), provisioning.Server{
 				ConnectionURL: server.URL,
 			})

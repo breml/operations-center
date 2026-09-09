@@ -9,6 +9,6 @@ import (
 	"github.com/FuturFusion/operations-center/internal/provisioning"
 )
 
-func (c client) GetRemoteCertificate(_ context.Context, endpoint provisioning.Endpoint) (*x509.Certificate, error) {
+func (c Client) GetRemoteCertificate(_ context.Context, endpoint provisioning.Endpoint) (*x509.Certificate, error) {
 	return incustls.GetRemoteCertificate(endpoint.GetConnectionURL(), "")
 }
