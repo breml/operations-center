@@ -28,6 +28,14 @@ A key database, that holds the certificates of IncusOS plus the allow listed
 entries and nothing else, is left untouched entirely, which spares a server, that
 is deployed a second time, having its UEFI keys deleted and rewritten.
 
+The allow list also decides, what the secure boot enrollment media re-enrolls. A
+deployment, that enrolls the certificates from an enrollment media rather than
+through the Redfish API, starts from wiped key databases, so an allow listed
+entry has to be enrolled again from actual certificate material. That material
+comes from the certificate catalogue in
+[`../../securebootcerts`](../../securebootcerts). An entry, that the catalogue
+does not know, is reported as a warning and lost.
+
 ## Example
 
 An example of a BIOS profile, showing all the fields available for matching and
