@@ -1,14 +1,12 @@
-// Package seedprogress records how much of a seed image the sources streaming
-// it have read.
+// Package seedprogress records how much of its installation media a deployment
+// has read.
 package seedprogress
 
 import (
-	"cmp"
 	"context"
 	"io"
 	"log/slog"
 	"maps"
-	"slices"
 	"sync"
 	"time"
 
@@ -30,17 +28,10 @@ type Tracker struct {
 	now                func() time.Time
 
 	mu      sync.Mutex
-	entries map[entryKey]*entry
+	entries map[string]*entry
 }
 
 var _ provisioning.SeedImageProgressPort = &Tracker{}
-
-// entryKey is what tells the readers of the seed images apart. Several servers
-// can install from the same image at the same time.
-type entryKey struct {
-	imageID provisioning.SeedImageID
-	source  string
-}
 
 type entry struct {
 	size int64
@@ -79,7 +70,7 @@ func New(opts ...Option) *Tracker {
 	tracker := &Tracker{
 		idleEvictionPeriod: defaultIdleEvictionPeriod,
 		now:                time.Now,
-		entries:            map[entryKey]*entry{},
+		entries:            map[string]*entry{},
 	}
 
 	for _, opt := range opts {
@@ -90,92 +81,58 @@ func New(opts ...Option) *Tracker {
 }
 
 // Track wraps content, so that the reads served from it are recorded as
-// progress of source reading the image identified by imageID.
-func (t *Tracker) Track(ctx context.Context, imageID provisioning.SeedImageID, source string, info provisioning.SeedImageInfo, content io.ReadSeekCloser) io.ReadSeekCloser {
-	key := entryKey{
-		imageID: imageID,
-		source:  source,
-	}
-
+// progress of the deployment named by deploymentID.
+func (t *Tracker) Track(ctx context.Context, deploymentID string, info provisioning.SeedImageInfo, content io.ReadSeekCloser) io.ReadSeekCloser {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
 	t.evict()
 
-	e := t.entry(key)
+	e := t.entry(deploymentID)
 	e.size = info.Size
 	e.lastActivity = t.now()
 
 	return &trackedContent{
-		ctx:     ctx,
-		tracker: t,
-		key:     key,
-		content: content,
+		ctx:          ctx,
+		tracker:      t,
+		deploymentID: deploymentID,
+		content:      content,
 	}
 }
 
-// Get returns the progress recorded for imageID being read by source and
-// reports whether anything has been recorded at all.
-func (t *Tracker) Get(_ context.Context, imageID provisioning.SeedImageID, source string) (provisioning.SeedImageProgress, bool) {
+// Get returns the progress recorded for the deployment and reports whether
+// anything has been recorded at all.
+func (t *Tracker) Get(_ context.Context, deploymentID string) (provisioning.SeedImageProgress, bool) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
 	t.evict()
 
-	key := entryKey{imageID: imageID, source: source}
-
-	e, ok := t.entries[key]
+	e, ok := t.entries[deploymentID]
 	if !ok {
 		return provisioning.SeedImageProgress{}, false
 	}
 
-	return e.progress(key), true
+	return e.progress(deploymentID), true
 }
 
-// GetByImage returns the progress recorded for imageID by every source, that
-// has read it, ordered by source.
-func (t *Tracker) GetByImage(_ context.Context, imageID provisioning.SeedImageID) []provisioning.SeedImageProgress {
+// Reset drops what has been recorded for the deployment, leaving every other
+// deployment, including the ones reading the very same image, alone.
+func (t *Tracker) Reset(_ context.Context, deploymentID string) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
-	t.evict()
-
-	var progress []provisioning.SeedImageProgress
-
-	for key, e := range t.entries {
-		if key.imageID != imageID {
-			continue
-		}
-
-		progress = append(progress, e.progress(key))
-	}
-
-	slices.SortFunc(progress, func(a provisioning.SeedImageProgress, b provisioning.SeedImageProgress) int {
-		return cmp.Compare(a.Source, b.Source)
-	})
-
-	return progress
-}
-
-// Reset drops what has been recorded for imageID, no matter which source read
-// it.
-func (t *Tracker) Reset(_ context.Context, imageID provisioning.SeedImageID) {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-
-	maps.DeleteFunc(t.entries, func(key entryKey, _ *entry) bool {
-		return key.imageID == imageID
-	})
+	delete(t.entries, deploymentID)
 }
 
 // record accounts for the n bytes at offset having been read.
-func (t *Tracker) record(ctx context.Context, key entryKey, offset int64, n int, isRequestStart bool) {
+func (t *Tracker) record(ctx context.Context, deploymentID string, offset int64, n int, isRequestStart bool) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
 	now := t.now()
 
-	e := t.entry(key)
+	e := t.entry(deploymentID)
 	e.bytesServed += int64(n)
 	e.coverage.add(offset, int64(n))
 
@@ -198,8 +155,7 @@ func (t *Tracker) record(ctx context.Context, key entryKey, offset int64, n int,
 
 	slog.DebugContext(
 		ctx, "Seed image read progress",
-		slog.String("image_id", key.imageID.String()),
-		slog.String("source", key.source),
+		slog.String("deployment_id", deploymentID),
 		slog.Int64("bytes_covered", e.coverage.bytes()),
 		slog.Int64("bytes_served", e.bytesServed),
 		slog.Int64("size", e.size),
@@ -210,10 +166,9 @@ func (t *Tracker) record(ctx context.Context, key entryKey, offset int64, n int,
 
 // progress returns what has been recorded for the entry. The caller holds the
 // lock.
-func (e *entry) progress(key entryKey) provisioning.SeedImageProgress {
+func (e *entry) progress(deploymentID string) provisioning.SeedImageProgress {
 	return provisioning.SeedImageProgress{
-		ImageID:      key.imageID,
-		Source:       key.source,
+		DeploymentID: deploymentID,
 		Size:         e.size,
 		BytesServed:  e.bytesServed,
 		BytesCovered: e.coverage.bytes(),
@@ -223,38 +178,38 @@ func (e *entry) progress(key entryKey) provisioning.SeedImageProgress {
 	}
 }
 
-// entry returns the entry for key, adding it if it does not exist yet. The
-// caller holds the lock.
-func (t *Tracker) entry(key entryKey) *entry {
-	e, ok := t.entries[key]
+// entry returns the entry of the deployment, adding it if it does not exist yet.
+// The caller holds the lock.
+func (t *Tracker) entry(deploymentID string) *entry {
+	e, ok := t.entries[deploymentID]
 	if !ok {
 		e = &entry{}
-		t.entries[key] = e
+		t.entries[deploymentID] = e
 	}
 
 	return e
 }
 
 // evict drops the records without any activity for the idle eviction period, so
-// that a long running daemon does not accumulate one record per source and
-// image. The caller holds the lock.
+// that a long running daemon does not accumulate one record per deployment ever
+// run. The caller holds the lock.
 func (t *Tracker) evict() {
 	deadline := t.now().Add(-t.idleEvictionPeriod)
 
-	maps.DeleteFunc(t.entries, func(_ entryKey, e *entry) bool {
+	maps.DeleteFunc(t.entries, func(_ string, e *entry) bool {
 		return e.lastActivity.Before(deadline)
 	})
 }
 
-// trackedContent reports the reads served from one image to one source.
+// trackedContent reports the reads served from one image to one deployment.
 type trackedContent struct {
 	// ctx is the context of the request being served. It is only used to log
 	// the progress along with what identifies the request.
-	ctx     context.Context
-	tracker *Tracker
-	key     entryKey
-	content io.ReadSeekCloser
-	pos     int64
+	ctx          context.Context
+	tracker      *Tracker
+	deploymentID string
+	content      io.ReadSeekCloser
+	pos          int64
 
 	hasRead bool
 }
@@ -262,7 +217,7 @@ type trackedContent struct {
 func (c *trackedContent) Read(p []byte) (int, error) {
 	n, err := c.content.Read(p)
 	if n > 0 {
-		c.tracker.record(c.ctx, c.key, c.pos, n, !c.hasRead)
+		c.tracker.record(c.ctx, c.deploymentID, c.pos, n, !c.hasRead)
 		c.pos += int64(n)
 		c.hasRead = true
 	}

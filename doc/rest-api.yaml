@@ -5352,7 +5352,9 @@ definitions:
                     Force requests, that a token seed, which does not reboot the server upon
                     completion of the installation ("force_reboot"), is accepted. The
                     deployment then relies on the read progress of the installation media
-                    alone to tell, when the first stage of the installation is done.
+                    alone to tell, when the first stage of the installation is done, so it
+                    needs a virtual media device, that streams the media rather than uploading
+                    it before the server boots.
                 example: false
                 type: boolean
                 x-go-name: Force
@@ -5392,9 +5394,10 @@ definitions:
                 description: |-
                     VirtualMediaID identifies the virtual media device the installation media
                     is attached to, using the "<service>:<bmc-id>" notation (e.g. "system:1").
-                    Optional, the first virtual media device advertising CD or DVD support is
-                    picked automatically, if it is left empty, the ones offered by the system
-                    taking precedence over the ones offered by the manager.
+                    Optional, the first virtual media device advertising support for the
+                    requested image type is picked automatically, if it is left empty (CD or
+                    DVD for an ISO image, USB stick or floppy for a raw one), the ones offered
+                    by the system taking precedence over the ones offered by the manager.
                 example: system:1
                 type: string
                 x-go-name: VirtualMediaID
@@ -13036,10 +13039,13 @@ paths:
                   type: string
                 - description: |-
                     Flat sequence of "<key>/<value>" pairs (architecture, type,
-                    optionally channel) followed by a filename segment, e.g.
-                    "architecture/x86_64/type/iso/file.iso" for the image the token seed
-                    resolves to, or "architecture/x86_64/type/iso/a1B2c3D4e5F6.iso" for
-                    one already generated image.
+                    optionally channel and deployment) followed by a filename segment,
+                    e.g. "architecture/x86_64/type/iso/file.iso" for the image the token
+                    seed resolves to, or "architecture/x86_64/type/iso/a1B2c3D4e5F6.iso"
+                    for one already generated image. A "deployment" pair names the
+                    automated deployment reading the image, which does not change, which
+                    image is served, it only tells the readers of one and the same image
+                    apart.
                   in: path
                   name: params
                   required: true

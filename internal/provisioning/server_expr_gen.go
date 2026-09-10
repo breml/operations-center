@@ -486,13 +486,14 @@ type ExprServerDeployment struct {
 	BIOSPending            bool                            `json:"bios_pending" expr:"bios_pending"`
 	BIOSDeferredPending    bool                            `json:"bios_deferred_pending" expr:"bios_deferred_pending"`
 	SecureBootPending      bool                            `json:"secure_boot_pending" expr:"secure_boot_pending"`
+	SecureBootAttempted    bool                            `json:"secure_boot_attempted" expr:"secure_boot_attempted"`
 	MediaURL               string                          `json:"media_url" expr:"media_url"`
-	ImageCacheID           string                          `json:"image_cache_id" expr:"image_cache_id"`
-	ImageFingerprintID     string                          `json:"image_fingerprint_id" expr:"image_fingerprint_id"`
+	ImageDeploymentID      string                          `json:"image_deployment_id" expr:"image_deployment_id"`
 	BIOSTaskMonitor        string                          `json:"bios_task_monitor" expr:"bios_task_monitor"`
 	FallbackAttempts       int                             `json:"fallback_attempts" expr:"fallback_attempts"`
 	MediaBytesRead         int64                           `json:"media_bytes_read" expr:"media_bytes_read"`
 	MediaSize              int64                           `json:"media_size" expr:"media_size"`
+	InstallOSObserved      bool                            `json:"install_os_observed" expr:"install_os_observed"`
 	SecureBootSnapshot     ExprServerDeploymentBMCSnapshot `json:"secure_boot_snapshot" expr:"secure_boot_snapshot"`
 	InstallSnapshot        ExprServerDeploymentBMCSnapshot `json:"install_snapshot" expr:"install_snapshot"`
 	Retries                int                             `json:"retries" expr:"retries"`
@@ -1100,13 +1101,14 @@ func ToExprServerDeployment(s ServerDeployment) ExprServerDeployment {
 		BIOSPending:            s.BIOSPending,
 		BIOSDeferredPending:    s.BIOSDeferredPending,
 		SecureBootPending:      s.SecureBootPending,
+		SecureBootAttempted:    s.SecureBootAttempted,
 		MediaURL:               s.MediaURL,
-		ImageCacheID:           s.ImageCacheID,
-		ImageFingerprintID:     s.ImageFingerprintID,
+		ImageDeploymentID:      s.ImageDeploymentID,
 		BIOSTaskMonitor:        s.BIOSTaskMonitor,
 		FallbackAttempts:       s.FallbackAttempts,
 		MediaBytesRead:         s.MediaBytesRead,
 		MediaSize:              s.MediaSize,
+		InstallOSObserved:      s.InstallOSObserved,
 		SecureBootSnapshot:     ToExprServerDeploymentBMCSnapshot(s.SecureBootSnapshot),
 		InstallSnapshot:        ToExprServerDeploymentBMCSnapshot(s.InstallSnapshot),
 		Retries:                s.Retries,

@@ -6,9 +6,11 @@ import (
 	"crypto/tls"
 	"io"
 	"maps"
+	"net/url"
 	"os"
 	"path"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -49,6 +51,11 @@ const (
 	// spending a tick per simulated second.
 	deploymentIdleTick = time.Minute
 
+	// deploymentMaxMediaEjectDelay is how long a server, that has installed and
+	// waits for its media to go before it reboots, may be left waiting. It bounds
+	// the media idle period plus the granularity, at which the fake advances.
+	deploymentMaxMediaEjectDelay = 3 * time.Minute
+
 	deploymentDriveIterations = 400
 )
 
@@ -63,6 +70,7 @@ const (
 	worldEarlyRebootDelay    = 4 * time.Minute
 	worldMediaReadDuration   = 5 * time.Minute
 	worldRegistrationDelay   = 2 * time.Minute
+	worldEjectDelay          = 30 * time.Second
 	worldMediaSize           = 4 * config.ServerDeploymentMediaMinBytesRead
 )
 
@@ -128,10 +136,10 @@ type bmcWorld struct {
 
 	secureBootPending bool
 
-	mediaProgress   map[string]provisioning.SeedImageProgress
-	mediaReadStart  time.Time
-	mediaProgressID provisioning.SeedImageID
-	mediaResets     int
+	mediaProgress     map[string]provisioning.SeedImageProgress
+	mediaReadStart    time.Time
+	mediaDeploymentID string
+	mediaResets       int
 
 	register func(ctx context.Context) error
 
@@ -142,6 +150,9 @@ type bmcWorld struct {
 	// The knobs, that let a row model a BMC or a server behaving differently.
 	dropsMediaOnBoot    bool
 	installDuration     time.Duration
+	postDuration        time.Duration
+	bootGeneration      int
+	bootsMediaAgain     bool
 	ignorePowerOffs     int
 	biosApplyDrops      int
 	secureBootEnrolls   bool
@@ -149,6 +160,8 @@ type bmcWorld struct {
 	noLastResetTime     bool
 	uploadTransfer      bool
 	installViaMediaRead bool
+	cachesMedia         bool
+	mediaEjectDelay     time.Duration
 	mediaFromOtherHost  bool
 	registers           bool
 	registrationDelay   time.Duration
@@ -159,6 +172,7 @@ type bmcWorld struct {
 	awaitingPowerOn     bool
 	powerOffErrs        queue.Errs
 	attachMediaErrs     queue.Errs
+	ejectDelay          time.Duration
 }
 
 func newBMCWorld(t *testing.T, clock *testClock, opts ...func(*bmcWorld)) *bmcWorld {
@@ -208,6 +222,13 @@ func (w *bmcWorld) detachedSinceInstall() []string {
 	defer w.mu.Unlock()
 
 	return slices.Clone(w.detachedIDs)
+}
+
+func (w *bmcWorld) mediaEjectedAfter() time.Duration {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	return w.mediaEjectDelay
 }
 
 func (w *bmcWorld) mediaInserted() []string {
@@ -286,15 +307,34 @@ func (w *bmcWorld) bootNow() {
 
 	w.lastResetTime = now
 	w.bootProgress = api.BMCBootProgress{LastState: worldBootProgressEarly, LastStateTime: now}
+	w.bootGeneration++
 
-	w.schedule(worldBootDuration, "boot progress reaches the operating system", func(ctx context.Context, w *bmcWorld) error {
+	postDuration := w.postDurationOrDefault()
+
+	generation := w.bootGeneration
+
+	w.schedule(postDuration, "boot progress reaches the operating system", func(ctx context.Context, w *bmcWorld) error {
 		w.mu.Lock()
 		defer w.mu.Unlock()
+
+		if w.bootGeneration != generation {
+			return nil
+		}
 
 		w.bootProgress = api.BMCBootProgress{LastState: worldBootProgressLate, LastStateTime: w.clock.Now()}
 
 		return nil
 	})
+}
+
+// postDurationOrDefault returns how long the server takes from a reset to the
+// hand over to the operating system. It has to be called with the lock held.
+func (w *bmcWorld) postDurationOrDefault() time.Duration {
+	if w.postDuration == 0 {
+		return worldBootDuration
+	}
+
+	return w.postDuration
 }
 
 // startInstall models booting the installation media: the installer reads the
@@ -326,6 +366,20 @@ func (w *bmcWorld) startInstall() {
 		return
 	}
 
+	// A BMC, that caches the installation media instead of streaming it to the
+	// installer, has read it out while the server boots and stays quiet for the
+	// rest of the installation.
+	if w.cachesMedia {
+		w.schedule(worldMediaReadDuration, "installation media has been read", func(ctx context.Context, w *bmcWorld) error {
+			w.mu.Lock()
+			defer w.mu.Unlock()
+
+			w.recordMediaProgress()
+
+			return nil
+		})
+	}
+
 	// A firmware, that still has something to pick up, reboots the server within
 	// the first POST cycles, long before the installation could be done.
 	if w.rebootsEarly {
@@ -348,8 +402,34 @@ func (w *bmcWorld) startInstall() {
 		w.mu.Lock()
 		defer w.mu.Unlock()
 
-		w.recordMediaProgress()
+		if !w.cachesMedia {
+			w.recordMediaProgress()
+		}
+
 		w.bootNow()
+
+		// A server, that does not fall back to the installed system on its own,
+		// boots the installation media again, where the installer refuses to run
+		// a second time, so the server never registers. Ejecting the media has
+		// the POST of that boot to come through.
+		if w.bootsMediaAgain {
+			w.schedule(w.postDurationOrDefault(), "server picked its boot device", func(ctx context.Context, w *bmcWorld) error {
+				w.mu.Lock()
+				defer w.mu.Unlock()
+
+				media, ok := w.virtualMedia[w.bootDevice]
+				if ok && media.Inserted {
+					return nil
+				}
+
+				w.scheduleRegistration()
+
+				return nil
+			})
+
+			return nil
+		}
+
 		w.scheduleRegistration()
 
 		return nil
@@ -373,18 +453,12 @@ func (w *bmcWorld) scheduleRegistration() {
 
 // recordMediaProgress has to be called with the lock held.
 func (w *bmcWorld) recordMediaProgress() {
-	if w.mediaProgressID.FingerprintID == "" {
+	if w.mediaDeploymentID == "" {
 		return
 	}
 
-	source := provisioning.SeedImageSource(worldBMCHost)
-	if w.mediaFromOtherHost {
-		source = provisioning.SeedImageSource("192.168.1.101")
-	}
-
-	w.mediaProgress[source] = provisioning.SeedImageProgress{
-		ImageID:      w.mediaProgressID,
-		Source:       source,
+	w.mediaProgress[w.mediaDeploymentID] = provisioning.SeedImageProgress{
+		DeploymentID: w.mediaDeploymentID,
 		Size:         worldMediaSize,
 		BytesServed:  worldMediaSize,
 		BytesCovered: worldMediaSize,
@@ -616,6 +690,8 @@ func deploymentBMCClient(t *testing.T, world *bmcWorld) *adapterMock.BMCServerCl
 				world.bootDevice = virtualMediaID
 			}
 
+			world.mediaDeploymentID = deploymentIDFromMediaURL(t, mediaURL)
+
 			return monitor(world), nil
 		},
 
@@ -626,14 +702,34 @@ func deploymentBMCClient(t *testing.T, world *bmcWorld) *adapterMock.BMCServerCl
 			world.calls["DetachMedia"]++
 			world.detachedIDs = append(world.detachedIDs, virtualMediaID)
 
-			media := world.virtualMedia[virtualMediaID]
-			media.Inserted = false
-			media.Image = ""
-			media.ImageName = ""
-			world.virtualMedia[virtualMediaID] = media
+			lastRead := world.mediaProgress[world.mediaDeploymentID].LastRead
+			if !lastRead.IsZero() {
+				world.mediaEjectDelay = world.clock.Now().Sub(lastRead)
+			}
 
-			if world.bootDevice == virtualMediaID {
-				world.bootDevice = ""
+			eject := func(w *bmcWorld) {
+				media := w.virtualMedia[virtualMediaID]
+				media.Inserted = false
+				media.Image = ""
+				media.ImageName = ""
+				w.virtualMedia[virtualMediaID] = media
+
+				if w.bootDevice == virtualMediaID {
+					w.bootDevice = ""
+				}
+			}
+
+			if world.ejectDelay > 0 {
+				world.schedule(world.ejectDelay, "media of "+virtualMediaID+" ejected", func(ctx context.Context, w *bmcWorld) error {
+					w.mu.Lock()
+					defer w.mu.Unlock()
+
+					eject(w)
+
+					return nil
+				})
+			} else {
+				eject(world)
 			}
 
 			// A server, that does not reboot on its own when the first stage of
@@ -668,40 +764,38 @@ func deploymentBMCClient(t *testing.T, world *bmcWorld) *adapterMock.BMCServerCl
 	}
 }
 
+func deploymentIDFromMediaURL(t *testing.T, mediaURL string) string {
+	t.Helper()
+
+	parsed, err := url.Parse(mediaURL)
+	require.NoError(t, err)
+
+	segments := strings.Split(strings.Trim(parsed.Path, "/"), "/")
+
+	i := slices.Index(segments, "deployment")
+	require.NotEqual(t, -1, i, "the media URL names no deployment: %s", mediaURL)
+	require.Less(t, i+1, len(segments), "the media URL names no deployment: %s", mediaURL)
+
+	return segments[i+1]
+}
+
 func deploymentSeedImageProgressPort(world *bmcWorld) *adapterMock.SeedImageProgressPortMock {
 	return &adapterMock.SeedImageProgressPortMock{
-		GetFunc: func(ctx context.Context, imageID provisioning.SeedImageID, source string) (provisioning.SeedImageProgress, bool) {
+		GetFunc: func(ctx context.Context, deploymentID string) (provisioning.SeedImageProgress, bool) {
 			world.mu.Lock()
 			defer world.mu.Unlock()
 
-			progress, ok := world.mediaProgress[source]
-			if !ok || progress.ImageID != imageID {
-				return provisioning.SeedImageProgress{}, false
-			}
+			progress, ok := world.mediaProgress[deploymentID]
 
-			return progress, true
+			return progress, ok
 		},
-		GetByImageFunc: func(ctx context.Context, imageID provisioning.SeedImageID) []provisioning.SeedImageProgress {
-			world.mu.Lock()
-			defer world.mu.Unlock()
-
-			var recorded []provisioning.SeedImageProgress
-
-			for _, source := range slices.Sorted(maps.Keys(world.mediaProgress)) {
-				if world.mediaProgress[source].ImageID == imageID {
-					recorded = append(recorded, world.mediaProgress[source])
-				}
-			}
-
-			return recorded
-		},
-		ResetFunc: func(ctx context.Context, imageID provisioning.SeedImageID) {
+		ResetFunc: func(ctx context.Context, deploymentID string) {
 			world.mu.Lock()
 			defer world.mu.Unlock()
 
 			world.mediaResets++
-			world.mediaProgressID = imageID
-			world.mediaProgress = map[string]provisioning.SeedImageProgress{}
+
+			delete(world.mediaProgress, deploymentID)
 		},
 	}
 }

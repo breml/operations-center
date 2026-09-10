@@ -95,8 +95,9 @@ const (
 	// Time without any read of the installation media, after which the first
 	// stage of the installation is considered done. The period has to outlast the
 	// phase, in which the installer partitions the disk without reading the media
-	// anymore. Waiting too long costs nothing, since the stronger signals end the
-	// wait as soon as they can.
+	// anymore, but no more than that: it is the whole latency of the only signal
+	// a deployment requested with force has, where the server is done installing
+	// and waits for the media to go before it reboots.
 	ServerDeploymentMediaIdlePeriod = 2 * time.Minute
 
 	// Amount of the installation media, that has to have been read, before the
@@ -108,10 +109,20 @@ const (
 	// the installer stops reading.
 	ServerDeploymentMediaMinBytesRead int64 = 500 * 1024 * 1024
 
-	// Time, that has to have passed in the install wait, before anything but the
-	// server having registered itself counts as the end of the first stage of
-	// the installation.
+	// Time, that has to have passed in the install wait, before the first stage
+	// of the installation could be done at all, which the read progress of the
+	// installation media is held against. A Lenovo ThinkSystem was through the
+	// first stage in nine and a half minutes, so this stays well below what an
+	// installation takes.
 	ServerDeploymentMinInstallDuration = 5 * time.Minute
+
+	// Time, that has to have passed in the install wait, before a reboot counts
+	// as the end of the first stage, where the BMC reports no boot progress to
+	// tell the reboot of the firmware, that picks up what has been staged for it,
+	// from the one of the installer. It has to outlast the power on self test
+	// plus the boot of the installation media, which is why it is longer than the
+	// duration above, and it only applies where nothing better is available.
+	ServerDeploymentInstallRebootFallbackDelay = 10 * time.Minute
 
 	// Time, the server is left running after the secure boot certificates have
 	// been enrolled, before the installation is started, where the firmware does

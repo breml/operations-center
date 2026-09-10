@@ -1,7 +1,6 @@
 package provisioning
 
 import (
-	"net/url"
 	"slices"
 	"time"
 
@@ -158,12 +157,17 @@ type ServerDeployment struct {
 	// given a boot to pick them up, before the installation is started.
 	SecureBootPending bool `json:"secure_boot_pending"`
 
+	// SecureBootAttempted records, that the enrollment of the secure boot
+	// certificates has been issued at least once. It is persisted before the
+	// enrollment runs, since the BMC reports the key databases as applied
+	// afterwards, so a re-issued enrollment can not tell an earlier attempt,
+	// that wrote them, apart from a server, that held them all along.
+	SecureBootAttempted bool `json:"secure_boot_attempted"`
+
 	// MediaURL is the installation media, as it is handed to the BMC, while
-	// ImageCacheID and ImageFingerprintID address the generated media, so the
-	// read progress recorded for it can be looked up.
-	MediaURL           string `json:"media_url"`
-	ImageCacheID       string `json:"image_cache_id"`
-	ImageFingerprintID string `json:"image_fingerprint_id"`
+	// ImageDeploymentID names this deployment reading the generated media.
+	MediaURL          string `json:"media_url"`
+	ImageDeploymentID string `json:"image_deployment_id"`
 
 	// BIOSTaskMonitor holds the URI of the BMC task monitor of the application
 	// of the BIOS attributes. It is kept, since the server is powered on before
@@ -179,6 +183,13 @@ type ServerDeployment struct {
 	// no matter how often it was requested, or -1, if no progress is available.
 	MediaBytesRead int64 `json:"media_bytes_read"`
 	MediaSize      int64 `json:"media_size"`
+
+	// InstallOSObserved records, that the BMC has reported the server past the
+	// hand over to the operating system since the install wait was anchored, so
+	// the installer has been running. It is what tells the reboot at the end of
+	// the first stage apart from the one the firmware performs within the POST
+	// cycles of the boot, that is supposed to start the installer.
+	InstallOSObserved bool `json:"install_os_observed"`
 
 	// SecureBootSnapshot and InstallSnapshot hold the reboot relevant BMC
 	// properties, as they were observed on the boot, that lets the firmware pick
@@ -239,31 +250,6 @@ func (d *ServerDeployment) transition(now time.Time, state api.ServerDeploymentS
 	if state.IsTerminal() {
 		d.FinishedAt = now
 	}
-}
-
-// SeedImageID returns the identity of the generated installation media of the
-// deployment. It is only set once the media has been attached.
-func (d ServerDeployment) SeedImageID() SeedImageID {
-	return SeedImageID{
-		CacheID:       d.ImageCacheID,
-		FingerprintID: d.ImageFingerprintID,
-	}
-}
-
-// BMCSource returns the address, the BMC of the server is expected to read the
-// installation media from.
-func (s Server) BMCSource() string {
-	endpoint := s.BMCConfig.Endpoint
-	if endpoint == "" {
-		return ""
-	}
-
-	endpointURL, err := url.Parse(endpoint)
-	if err != nil || endpointURL.Host == "" {
-		return SeedImageSource(endpoint)
-	}
-
-	return SeedImageSource(endpointURL.Host)
 }
 
 func (d ServerDeployment) ToAPI() *api.ServerDeploymentStatus {

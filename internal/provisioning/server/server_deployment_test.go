@@ -22,7 +22,6 @@ import (
 	svcMock "github.com/FuturFusion/operations-center/internal/provisioning/mock"
 	repoMock "github.com/FuturFusion/operations-center/internal/provisioning/repo/mock"
 	provisioningServer "github.com/FuturFusion/operations-center/internal/provisioning/server"
-	"github.com/FuturFusion/operations-center/internal/util/ptr"
 	"github.com/FuturFusion/operations-center/internal/util/testing/boom"
 	"github.com/FuturFusion/operations-center/internal/util/testing/errassert"
 	"github.com/FuturFusion/operations-center/internal/util/testing/queue"
@@ -91,16 +90,21 @@ func (s *deploymentServerStore) put(server provisioning.Server) {
 	s.servers[server.Name] = cloneDeploymentServer(server)
 }
 
-func (s *deploymentServerStore) all() provisioning.Servers {
+func (s *deploymentServerStore) namesWithActiveDeployment() []string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	servers := make(provisioning.Servers, 0, len(s.servers))
+	var names []string
+
 	for _, name := range slices.Sorted(maps.Keys(s.servers)) {
-		servers = append(servers, cloneDeploymentServer(s.servers[name]))
+		if !s.servers[name].StatusInternal.Deployment.IsActive() {
+			continue
+		}
+
+		names = append(names, name)
 	}
 
-	return servers
+	return names
 }
 
 func deploymentTestServer(name string) provisioning.Server {
@@ -132,8 +136,10 @@ func deploymentTestBMCData(virtualMedia ...api.BMCVirtualMedia) api.BMCData {
 }
 
 var (
-	deploymentTestOpticalMedia = api.BMCVirtualMedia{ID: "system:1", MediaTypes: []string{"CD", "DVD"}}
-	deploymentTestUSBMedia     = api.BMCVirtualMedia{ID: "manager:1", MediaTypes: []string{"USBStick"}}
+	deploymentTestOpticalMedia   = api.BMCVirtualMedia{ID: "system:1", MediaTypes: []string{"CD", "DVD"}}
+	deploymentTestUSBMedia       = api.BMCVirtualMedia{ID: "manager:1", MediaTypes: []string{"USBStick"}}
+	deploymentTestUntypedMedia   = api.BMCVirtualMedia{ID: "manager:2"}
+	deploymentTestUploadingMedia = api.BMCVirtualMedia{ID: "system:1", MediaTypes: []string{"CD", "DVD"}, TransferMethod: "Upload"}
 )
 
 func TestServerService_DeployByName(t *testing.T) {
@@ -264,7 +270,42 @@ func TestServerService_DeployByName(t *testing.T) {
 				Seed:           "default",
 				ImageType:      api.ImageTypeISO,
 				Architecture:   images.UpdateFileArchitecture64BitX86,
-				VirtualMediaID: "manager:1",
+				VirtualMediaID: "manager:2",
+			},
+			operationsCenterAddress: deploymentTestOperationsCenterAddress,
+			server:                  new(deploymentTestServer("one")),
+			bmcGetData:              deploymentTestBMCData(deploymentTestUntypedMedia, deploymentTestOpticalMedia),
+			tokenSvcGetByUUID:       validToken,
+			tokenSvcGetSeed:         validSeed,
+			withBIOSProfilePort:     true,
+			biosProfileResolve:      &provisioning.BIOSProfileResolution{},
+
+			wantDeployment: &provisioning.ServerDeployment{
+				State: api.ServerDeploymentStateRefreshBMCData,
+				Request: provisioning.ServerDeploymentRequest{
+					TokenUUID:      tokenUUID,
+					Seed:           "default",
+					ImageType:      api.ImageTypeISO,
+					Architecture:   images.UpdateFileArchitecture64BitX86,
+					VirtualMediaID: "manager:2",
+				},
+				ForceReboot:    true,
+				MediaBytesRead: -1,
+				StartedAt:      deploymentTestDate,
+				StateEnteredAt: deploymentTestDate,
+				History:        []api.ServerDeploymentStep{},
+			},
+			wantStatus: api.ServerStatusDeploying,
+			assertErr:  require.NoError,
+		},
+		{
+			name:    "success - a raw image is attached to the USB device, not the optical one",
+			nameArg: "one",
+			requestArg: provisioning.ServerDeploymentRequest{
+				TokenUUID:    tokenUUID,
+				Seed:         "default",
+				ImageType:    api.ImageTypeRaw,
+				Architecture: images.UpdateFileArchitecture64BitX86,
 			},
 			operationsCenterAddress: deploymentTestOperationsCenterAddress,
 			server:                  new(deploymentTestServer("one")),
@@ -279,7 +320,7 @@ func TestServerService_DeployByName(t *testing.T) {
 				Request: provisioning.ServerDeploymentRequest{
 					TokenUUID:      tokenUUID,
 					Seed:           "default",
-					ImageType:      api.ImageTypeISO,
+					ImageType:      api.ImageTypeRaw,
 					Architecture:   images.UpdateFileArchitecture64BitX86,
 					VirtualMediaID: "manager:1",
 				},
@@ -291,6 +332,38 @@ func TestServerService_DeployByName(t *testing.T) {
 			},
 			wantStatus: api.ServerStatusDeploying,
 			assertErr:  require.NoError,
+		},
+		{
+			name:    "error - the explicitly requested virtual media device does not take the image",
+			nameArg: "one",
+			requestArg: provisioning.ServerDeploymentRequest{
+				TokenUUID:      tokenUUID,
+				Seed:           "default",
+				ImageType:      api.ImageTypeISO,
+				Architecture:   images.UpdateFileArchitecture64BitX86,
+				VirtualMediaID: "manager:1",
+			},
+			operationsCenterAddress: deploymentTestOperationsCenterAddress,
+			server:                  new(deploymentTestServer("one")),
+			bmcGetData:              deploymentTestBMCData(deploymentTestUSBMedia, deploymentTestOpticalMedia),
+			tokenSvcGetByUUID:       validToken,
+			tokenSvcGetSeed:         validSeed,
+
+			wantStatus: api.ServerStatusUnregistered,
+			assertErr:  errassert.OperationNotPermittedErrorContains(`does not accept a "iso" image, it supports USBStick`),
+		},
+		{
+			name:                    "error - no virtual media device takes the image",
+			nameArg:                 "one",
+			requestArg:              validRequest,
+			operationsCenterAddress: deploymentTestOperationsCenterAddress,
+			server:                  new(deploymentTestServer("one")),
+			bmcGetData:              deploymentTestBMCData(deploymentTestUSBMedia),
+			tokenSvcGetByUUID:       validToken,
+			tokenSvcGetSeed:         validSeed,
+
+			wantStatus: api.ServerStatusUnregistered,
+			assertErr:  errassert.OperationNotPermittedErrorContains(`No virtual media device of the BMC accepts a "iso" image, it reports manager:1 (USBStick)`),
 		},
 		{
 			name:                    "success - the first matching virtual media device is selected",
@@ -348,6 +421,82 @@ func TestServerService_DeployByName(t *testing.T) {
 					VirtualMediaID: "system:1",
 					Force:          true,
 				},
+				MediaBytesRead: -1,
+				StartedAt:      deploymentTestDate,
+				StateEnteredAt: deploymentTestDate,
+				History:        []api.ServerDeploymentStep{},
+			},
+			wantStatus: api.ServerStatusDeploying,
+			assertErr:  require.NoError,
+		},
+		{
+			name:                    "success - a seed without force reboot picks the streaming device",
+			nameArg:                 "one",
+			requestArg:              provisioning.ServerDeploymentRequest{TokenUUID: tokenUUID, Seed: "default", ImageType: api.ImageTypeISO, Architecture: images.UpdateFileArchitecture64BitX86, Force: true},
+			operationsCenterAddress: deploymentTestOperationsCenterAddress,
+			server:                  new(deploymentTestServer("one")),
+			bmcGetData: deploymentTestBMCData(
+				deploymentTestUploadingMedia,
+				api.BMCVirtualMedia{ID: "manager:1", MediaTypes: []string{"CD", "DVD"}},
+			),
+			tokenSvcGetByUUID:   validToken,
+			tokenSvcGetSeed:     &provisioning.TokenSeed{Token: tokenUUID, Name: "default", Public: true},
+			withBIOSProfilePort: true,
+			biosProfileResolve:  &provisioning.BIOSProfileResolution{},
+
+			wantDeployment: &provisioning.ServerDeployment{
+				State: api.ServerDeploymentStateRefreshBMCData,
+				Request: provisioning.ServerDeploymentRequest{
+					TokenUUID:      tokenUUID,
+					Seed:           "default",
+					ImageType:      api.ImageTypeISO,
+					Architecture:   images.UpdateFileArchitecture64BitX86,
+					VirtualMediaID: "manager:1",
+					Force:          true,
+				},
+				MediaBytesRead: -1,
+				StartedAt:      deploymentTestDate,
+				StateEnteredAt: deploymentTestDate,
+				History:        []api.ServerDeploymentStep{},
+			},
+			wantStatus: api.ServerStatusDeploying,
+			assertErr:  require.NoError,
+		},
+		{
+			name:                    "error - a seed without force reboot on a device, that uploads the media",
+			nameArg:                 "one",
+			requestArg:              provisioning.ServerDeploymentRequest{TokenUUID: tokenUUID, Seed: "default", ImageType: api.ImageTypeISO, Architecture: images.UpdateFileArchitecture64BitX86, Force: true},
+			operationsCenterAddress: deploymentTestOperationsCenterAddress,
+			server:                  new(deploymentTestServer("one")),
+			bmcGetData:              deploymentTestBMCData(deploymentTestUploadingMedia),
+			tokenSvcGetByUUID:       validToken,
+			tokenSvcGetSeed:         &provisioning.TokenSeed{Token: tokenUUID, Name: "default", Public: true},
+
+			wantStatus: api.ServerStatusUnregistered,
+			assertErr:  errassert.OperationNotPermittedErrorContains("uploads the installation media instead of streaming it"),
+		},
+		{
+			name:                    "success - a seed with force reboot takes the device, that uploads the media",
+			nameArg:                 "one",
+			requestArg:              validRequest,
+			operationsCenterAddress: deploymentTestOperationsCenterAddress,
+			server:                  new(deploymentTestServer("one")),
+			bmcGetData:              deploymentTestBMCData(deploymentTestUploadingMedia),
+			tokenSvcGetByUUID:       validToken,
+			tokenSvcGetSeed:         validSeed,
+			withBIOSProfilePort:     true,
+			biosProfileResolve:      &provisioning.BIOSProfileResolution{},
+
+			wantDeployment: &provisioning.ServerDeployment{
+				State: api.ServerDeploymentStateRefreshBMCData,
+				Request: provisioning.ServerDeploymentRequest{
+					TokenUUID:      tokenUUID,
+					Seed:           "default",
+					ImageType:      api.ImageTypeISO,
+					Architecture:   images.UpdateFileArchitecture64BitX86,
+					VirtualMediaID: "system:1",
+				},
+				ForceReboot:    true,
 				MediaBytesRead: -1,
 				StartedAt:      deploymentTestDate,
 				StateEnteredAt: deploymentTestDate,
@@ -918,6 +1067,14 @@ func TestServerService_DeploymentControlLoopCandidates(t *testing.T) {
 		return server
 	}
 
+	ready := func(name string) provisioning.Server {
+		server := deploying(name)
+		server.Status = api.ServerStatusReady
+		server.StatusDetail = api.ServerStatusDetailNone
+
+		return server
+	}
+
 	tests := []struct {
 		name              string
 		serverNameFilter  *string
@@ -939,6 +1096,13 @@ func TestServerService_DeploymentControlLoopCandidates(t *testing.T) {
 			servers: []provisioning.Server{deploying("one"), registering("two")},
 
 			wantAdvanced: []string{"one", "two"},
+			assertErr:    require.NoError,
+		},
+		{
+			name:    "success - a server, that has registered and turned ready, is still advanced",
+			servers: []provisioning.Server{ready("one")},
+
+			wantAdvanced: []string{"one"},
 			assertErr:    require.NoError,
 		},
 		{
@@ -987,7 +1151,7 @@ func TestServerService_DeploymentControlLoopCandidates(t *testing.T) {
 			assertErr: boom.ErrorIs,
 		},
 		{
-			name:           "error - repo.GetAllWithFilter",
+			name:           "error - repo.GetAllNamesWithActiveDeployment",
 			servers:        []provisioning.Server{deploying("one")},
 			repoGetAllErrs: queue.Errs{boom.Error},
 
@@ -1025,7 +1189,7 @@ func TestServerService_DeploymentControlLoopCandidates(t *testing.T) {
 
 					return server, nil
 				},
-				GetAllWithFilterFunc: func(ctx context.Context, filter provisioning.ServerFilter) (provisioning.Servers, error) {
+				GetAllNamesWithActiveDeploymentFunc: func(ctx context.Context) ([]string, error) {
 					recordMu.Lock()
 					defer recordMu.Unlock()
 
@@ -1034,21 +1198,7 @@ func TestServerService_DeploymentControlLoopCandidates(t *testing.T) {
 						return nil, err
 					}
 
-					var matching provisioning.Servers
-
-					for _, server := range store.all() {
-						if ptr.From(filter.Status) != server.Status {
-							continue
-						}
-
-						if filter.StatusDetail != nil && ptr.From(filter.StatusDetail) != server.StatusDetail {
-							continue
-						}
-
-						matching = append(matching, server)
-					}
-
-					return matching, nil
+					return store.namesWithActiveDeployment(), nil
 				},
 				UpdateFunc: func(ctx context.Context, in provisioning.Server) error {
 					store.put(in)

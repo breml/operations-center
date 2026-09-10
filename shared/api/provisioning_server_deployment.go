@@ -2,6 +2,7 @@ package api
 
 import (
 	"fmt"
+	"slices"
 	"time"
 )
 
@@ -38,16 +39,19 @@ type ServerDeploymentPost struct {
 
 	// VirtualMediaID identifies the virtual media device the installation media
 	// is attached to, using the "<service>:<bmc-id>" notation (e.g. "system:1").
-	// Optional, the first virtual media device advertising CD or DVD support is
-	// picked automatically, if it is left empty, the ones offered by the system
-	// taking precedence over the ones offered by the manager.
+	// Optional, the first virtual media device advertising support for the
+	// requested image type is picked automatically, if it is left empty (CD or
+	// DVD for an ISO image, USB stick or floppy for a raw one), the ones offered
+	// by the system taking precedence over the ones offered by the manager.
 	// Example: system:1
 	VirtualMediaID string `json:"virtual_media_id" yaml:"virtual_media_id"`
 
 	// Force requests, that a token seed, which does not reboot the server upon
 	// completion of the installation ("force_reboot"), is accepted. The
 	// deployment then relies on the read progress of the installation media
-	// alone to tell, when the first stage of the installation is done.
+	// alone to tell, when the first stage of the installation is done, so it
+	// needs a virtual media device, that streams the media rather than uploading
+	// it before the server boots.
 	// Example: false
 	Force bool `json:"force" yaml:"force"`
 
@@ -252,14 +256,23 @@ func (s ServerDeploymentState) String() string {
 	return string(s)
 }
 
+// serverDeploymentTerminalStates are the states, in which no further step is
+// performed for a deployment.
+var serverDeploymentTerminalStates = []ServerDeploymentState{
+	ServerDeploymentStateCompleted,
+	ServerDeploymentStateFailed,
+	ServerDeploymentStateCancelled,
+}
+
+// ServerDeploymentTerminalStates returns the states, in which no further step is
+// performed for a deployment.
+func ServerDeploymentTerminalStates() []ServerDeploymentState {
+	return slices.Clone(serverDeploymentTerminalStates)
+}
+
 // IsTerminal reports, if no further step is performed for a deployment in this state.
 func (s ServerDeploymentState) IsTerminal() bool {
-	switch s {
-	case ServerDeploymentStateCompleted, ServerDeploymentStateFailed, ServerDeploymentStateCancelled:
-		return true
-	}
-
-	return false
+	return slices.Contains(serverDeploymentTerminalStates, s)
 }
 
 // MarshalText implements the encoding.TextMarshaler interface.

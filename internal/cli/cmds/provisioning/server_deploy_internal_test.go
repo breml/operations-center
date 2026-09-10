@@ -176,7 +176,7 @@ func TestDeploymentProgressLines_reportsEveryStateOnce(t *testing.T) {
 
 	var (
 		history      = make([]api.ServerDeploymentStep, 0, len(states))
-		reported     []string
+		reported     = make([]string, 0, len(states))
 		reportedUpTo time.Time
 	)
 

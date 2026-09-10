@@ -169,46 +169,6 @@ func TestServerDeployment_EnterState(t *testing.T) {
 	require.Equal(t, entered.Add(3*time.Minute), deployment.FinishedAt)
 }
 
-func TestServer_BMCSource(t *testing.T) {
-	tests := []struct {
-		name     string
-		endpoint string
-
-		want string
-	}{
-		{
-			name:     "host and port",
-			endpoint: "https://192.168.1.10:443",
-			want:     "192.168.1.10",
-		},
-		{
-			name:     "host only",
-			endpoint: "https://bmc.local",
-			want:     "bmc.local",
-		},
-		{
-			name:     "IPv6",
-			endpoint: "https://[2001:db8::1]:8443",
-			want:     "2001:db8::1",
-		},
-		{
-			name:     "no endpoint",
-			endpoint: "",
-			want:     "",
-		},
-	}
-
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			server := provisioning.Server{
-				BMCConfig: api.BMCConfig{Endpoint: tc.endpoint},
-			}
-
-			require.Equal(t, tc.want, server.BMCSource())
-		})
-	}
-}
-
 func TestServerDeploymentBMCSnapshot(t *testing.T) {
 	taken := time.Date(2026, 8, 31, 10, 0, 0, 0, time.UTC)
 	reset := taken.Add(-time.Hour)

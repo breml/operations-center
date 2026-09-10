@@ -13,12 +13,7 @@ import (
 	"github.com/FuturFusion/operations-center/internal/provisioning/adapter/seedprogress"
 )
 
-const testSource = "10.0.0.1"
-
-var testImageID = provisioning.SeedImageID{
-	CacheID:       "cache-id",
-	FingerprintID: "fingerprint",
-}
+const testDeploymentID = "deployment-1"
 
 func TestTracker_overlappingRangeReads(t *testing.T) {
 	const content = "0123456789abcdefghij"
@@ -26,14 +21,14 @@ func TestTracker_overlappingRangeReads(t *testing.T) {
 	ctx := context.Background()
 	tracker := seedprogress.New()
 
-	image := tracker.Track(ctx, testImageID, testSource, provisioning.SeedImageInfo{Size: int64(len(content))}, nopReadSeekCloser{strings.NewReader(content)})
+	image := tracker.Track(ctx, testDeploymentID, provisioning.SeedImageInfo{Size: int64(len(content))}, nopReadSeekCloser{strings.NewReader(content)})
 
 	readRange(t, image, 10, 5)
 	readRange(t, image, 0, 5)
 
 	require.NoError(t, image.Close())
 
-	progress, ok := tracker.Get(ctx, testImageID, testSource)
+	progress, ok := tracker.Get(ctx, testDeploymentID)
 	require.True(t, ok)
 	require.Equal(t, int64(10), progress.BytesServed)
 	require.Equal(t, int64(10), progress.BytesCovered, "two disjoint ranges cover what they add up to")
@@ -46,14 +41,14 @@ func TestTracker_repeatedRangeReads(t *testing.T) {
 	ctx := context.Background()
 	tracker := seedprogress.New()
 
-	image := tracker.Track(ctx, testImageID, testSource, provisioning.SeedImageInfo{Size: int64(len(content))}, nopReadSeekCloser{strings.NewReader(content)})
+	image := tracker.Track(ctx, testDeploymentID, provisioning.SeedImageInfo{Size: int64(len(content))}, nopReadSeekCloser{strings.NewReader(content)})
 
 	readRange(t, image, 0, 5)
 	readRange(t, image, 0, 5)
 
 	require.NoError(t, image.Close())
 
-	progress, ok := tracker.Get(ctx, testImageID, testSource)
+	progress, ok := tracker.Get(ctx, testDeploymentID)
 	require.True(t, ok)
 	require.Equal(t, int64(10), progress.BytesServed, "every byte handed out is counted")
 	require.Equal(t, int64(5), progress.BytesCovered, "a range read twice is only covered once")
@@ -72,14 +67,14 @@ func TestTracker_coverageAcrossRequests(t *testing.T) {
 		{offset: 0, length: 10},
 		{offset: 5, length: 15},
 	} {
-		image := tracker.Track(ctx, testImageID, testSource, provisioning.SeedImageInfo{Size: int64(len(content))}, nopReadSeekCloser{strings.NewReader(content)})
+		image := tracker.Track(ctx, testDeploymentID, provisioning.SeedImageInfo{Size: int64(len(content))}, nopReadSeekCloser{strings.NewReader(content)})
 
 		readRange(t, image, read.offset, read.length)
 
 		require.NoError(t, image.Close())
 	}
 
-	progress, ok := tracker.Get(ctx, testImageID, testSource)
+	progress, ok := tracker.Get(ctx, testDeploymentID)
 	require.True(t, ok)
 	require.Equal(t, int64(25), progress.BytesServed)
 	require.Equal(t, int64(20), progress.BytesCovered, "the ranges two requests overlap in are only covered once")
@@ -92,7 +87,7 @@ func TestTracker_seekedReadsRecordAbsoluteOffsets(t *testing.T) {
 	ctx := context.Background()
 	tracker := seedprogress.New()
 
-	image := tracker.Track(ctx, testImageID, testSource, provisioning.SeedImageInfo{Size: int64(len(content))}, nopReadSeekCloser{strings.NewReader(content)})
+	image := tracker.Track(ctx, testDeploymentID, provisioning.SeedImageInfo{Size: int64(len(content))}, nopReadSeekCloser{strings.NewReader(content)})
 
 	_, err := image.Seek(-4, io.SeekEnd)
 	require.NoError(t, err)
@@ -110,76 +105,68 @@ func TestTracker_seekedReadsRecordAbsoluteOffsets(t *testing.T) {
 
 	require.NoError(t, image.Close())
 
-	progress, ok := tracker.Get(ctx, testImageID, testSource)
+	progress, ok := tracker.Get(ctx, testDeploymentID)
 	require.True(t, ok)
 	require.Equal(t, int64(12), progress.BytesServed)
 	require.Equal(t, int64(8), progress.BytesCovered, "a range reached by any kind of seek is covered once")
 }
 
-func TestTracker_reset(t *testing.T) {
+func TestTrackerReset(t *testing.T) {
 	const content = "0123456789"
 
 	ctx := context.Background()
 	tracker := seedprogress.New()
 
-	otherImage := provisioning.SeedImageID{CacheID: "other", FingerprintID: "fingerprint"}
+	const otherDeploymentID = "deployment-2"
 
-	for _, read := range []struct {
-		imageID provisioning.SeedImageID
-		source  string
-	}{
-		{imageID: testImageID, source: testSource},
-		{imageID: testImageID, source: "10.0.0.2"},
-		{imageID: otherImage, source: testSource},
-	} {
-		image := tracker.Track(ctx, read.imageID, read.source, provisioning.SeedImageInfo{Size: int64(len(content))}, nopReadSeekCloser{strings.NewReader(content)})
+	for _, deploymentID := range []string{testDeploymentID, otherDeploymentID} {
+		image := tracker.Track(ctx, deploymentID, provisioning.SeedImageInfo{Size: int64(len(content))}, nopReadSeekCloser{strings.NewReader(content)})
 
 		readRange(t, image, 0, 5)
 
 		require.NoError(t, image.Close())
 	}
 
-	tracker.Reset(ctx, testImageID)
+	tracker.Reset(ctx, testDeploymentID)
 
-	require.Empty(t, tracker.GetByImage(ctx, testImageID), "every source, that read the image, is dropped")
-	require.Len(t, tracker.GetByImage(ctx, otherImage), 1, "another image is kept")
+	_, ok := tracker.Get(ctx, testDeploymentID)
+	require.False(t, ok, "what the deployment read is dropped")
+
+	progress, ok := tracker.Get(ctx, otherDeploymentID)
+	require.True(t, ok, "the deployment still reading the image keeps its progress")
+	require.Equal(t, int64(5), progress.BytesCovered)
+
+	tracker.Reset(ctx, "deployment-never-seen")
 }
 
-func TestTracker_getByImage(t *testing.T) {
+func TestTracker_readsFromSeveralSources(t *testing.T) {
 	const content = "0123456789"
 
 	ctx := context.Background()
 	tracker := seedprogress.New()
 
-	otherImage := provisioning.SeedImageID{CacheID: "other", FingerprintID: "fingerprint"}
-
 	for _, read := range []struct {
-		imageID provisioning.SeedImageID
-		source  string
-		length  int64
+		offset int64
+		length int64
 	}{
-		{imageID: testImageID, source: "10.0.0.2", length: 4},
-		{imageID: testImageID, source: "10.0.0.1", length: 7},
-		{imageID: otherImage, source: "10.0.0.3", length: 2},
+		{offset: 0, length: 4},
+		{offset: 4, length: 3},
 	} {
-		image := tracker.Track(ctx, read.imageID, read.source, provisioning.SeedImageInfo{Size: int64(len(content))}, nopReadSeekCloser{strings.NewReader(content)})
+		image := tracker.Track(ctx, testDeploymentID, provisioning.SeedImageInfo{Size: int64(len(content))}, nopReadSeekCloser{strings.NewReader(content)})
 
-		readRange(t, image, 0, read.length)
+		readRange(t, image, read.offset, read.length)
 
 		require.NoError(t, image.Close())
 	}
 
-	progress := tracker.GetByImage(ctx, testImageID)
+	progress, ok := tracker.Get(ctx, testDeploymentID)
+	require.True(t, ok)
+	require.Equal(t, int64(7), progress.BytesServed)
+	require.Equal(t, int64(7), progress.BytesCovered, "the reads of both addresses add up")
+	require.Equal(t, 2, progress.RequestCount)
 
-	require.Len(t, progress, 2)
-	require.Equal(t, "10.0.0.1", progress[0].Source)
-	require.Equal(t, int64(7), progress[0].BytesServed)
-	require.Equal(t, int64(7), progress[0].BytesCovered)
-	require.Equal(t, "10.0.0.2", progress[1].Source)
-	require.Equal(t, int64(4), progress[1].BytesServed)
-	require.Equal(t, int64(4), progress[1].BytesCovered)
-
-	require.Empty(t, tracker.GetByImage(ctx, provisioning.SeedImageID{CacheID: "unread", FingerprintID: "fingerprint"}))
+	_, ok = tracker.Get(ctx, "deployment-never-seen")
+	require.False(t, ok)
 }
 
 func TestTracker_evictionAfterIdlePeriod(t *testing.T) {
@@ -193,7 +180,7 @@ func TestTracker_evictionAfterIdlePeriod(t *testing.T) {
 		seedprogress.WithNow(func() time.Time { return now }),
 	)
 
-	image := tracker.Track(ctx, testImageID, testSource, provisioning.SeedImageInfo{Size: int64(len(content))}, nopReadSeekCloser{strings.NewReader(content)})
+	image := tracker.Track(ctx, testDeploymentID, provisioning.SeedImageInfo{Size: int64(len(content))}, nopReadSeekCloser{strings.NewReader(content)})
 
 	_, err := io.ReadAll(image)
 	require.NoError(t, err)
@@ -201,13 +188,13 @@ func TestTracker_evictionAfterIdlePeriod(t *testing.T) {
 
 	now = now.Add(time.Hour)
 
-	progress, ok := tracker.Get(ctx, testImageID, testSource)
+	progress, ok := tracker.Get(ctx, testDeploymentID)
 	require.True(t, ok)
 	require.Equal(t, time.Hour, progress.IdleFor(now))
 
 	now = now.Add(time.Second)
 
-	_, ok = tracker.Get(ctx, testImageID, testSource)
+	_, ok = tracker.Get(ctx, testDeploymentID)
 	require.False(t, ok)
 }
 

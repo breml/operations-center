@@ -40,41 +40,31 @@ func NewSeedImageProgressPortWithPrometheus(base provisioning.SeedImageProgressP
 }
 
 // Get implements provisioning.SeedImageProgressPort.
-func (_d SeedImageProgressPortWithPrometheus) Get(ctx context.Context, imageID provisioning.SeedImageID, source string) (seedImageProgress provisioning.SeedImageProgress, b bool) {
+func (_d SeedImageProgressPortWithPrometheus) Get(ctx context.Context, deploymentID string) (seedImageProgress provisioning.SeedImageProgress, b bool) {
 	_since := time.Now()
 	defer func() {
 		result := "ok"
 		seedImageProgressPortDurationSummaryVec.WithLabelValues(_d.instanceName, "Get", result).Observe(time.Since(_since).Seconds())
 	}()
-	return _d.base.Get(ctx, imageID, source)
-}
-
-// GetByImage implements provisioning.SeedImageProgressPort.
-func (_d SeedImageProgressPortWithPrometheus) GetByImage(ctx context.Context, imageID provisioning.SeedImageID) (seedImageProgresss []provisioning.SeedImageProgress) {
-	_since := time.Now()
-	defer func() {
-		result := "ok"
-		seedImageProgressPortDurationSummaryVec.WithLabelValues(_d.instanceName, "GetByImage", result).Observe(time.Since(_since).Seconds())
-	}()
-	return _d.base.GetByImage(ctx, imageID)
+	return _d.base.Get(ctx, deploymentID)
 }
 
 // Reset implements provisioning.SeedImageProgressPort.
-func (_d SeedImageProgressPortWithPrometheus) Reset(ctx context.Context, imageID provisioning.SeedImageID) {
+func (_d SeedImageProgressPortWithPrometheus) Reset(ctx context.Context, deploymentID string) {
 	_since := time.Now()
 	defer func() {
 		result := "ok"
 		seedImageProgressPortDurationSummaryVec.WithLabelValues(_d.instanceName, "Reset", result).Observe(time.Since(_since).Seconds())
 	}()
-	_d.base.Reset(ctx, imageID)
+	_d.base.Reset(ctx, deploymentID)
 }
 
 // Track implements provisioning.SeedImageProgressPort.
-func (_d SeedImageProgressPortWithPrometheus) Track(ctx context.Context, imageID provisioning.SeedImageID, source string, info provisioning.SeedImageInfo, content io.ReadSeekCloser) (readSeekCloser io.ReadSeekCloser) {
+func (_d SeedImageProgressPortWithPrometheus) Track(ctx context.Context, deploymentID string, info provisioning.SeedImageInfo, content io.ReadSeekCloser) (readSeekCloser io.ReadSeekCloser) {
 	_since := time.Now()
 	defer func() {
 		result := "ok"
 		seedImageProgressPortDurationSummaryVec.WithLabelValues(_d.instanceName, "Track", result).Observe(time.Since(_since).Seconds())
 	}()
-	return _d.base.Track(ctx, imageID, source, info, content)
+	return _d.base.Track(ctx, deploymentID, info, content)
 }

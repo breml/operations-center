@@ -341,14 +341,20 @@ The relevant flags are:
   [Enroll the Secure Boot Certificates Manually](#enroll-the-secure-boot-certificates-manually).
 * `--virtual-media-id <virtual-media-id>`: only needed, if the automatically
   selected virtual media device is not the wanted one. Without the flag, the
-  first device advertising CD or DVD support is used, the devices offered by the
-  system taking precedence over the ones offered by the manager.
+  first device advertising support for the requested image type is used, the
+  devices offered by the system taking precedence over the ones offered by the
+  manager.
 * `--type raw`: by default, the ISO image is used for the installation. Some
   virtual media implementations do not support the ISO, in which case the raw
-  image has to be used. Unfortunately, this is only detected mid deployment.
+  image has to be used. The virtual media device is selected accordingly, and a
+  server, whose devices all reject the requested image type, is refused right
+  away.
 * `--force`: needed, if the token seed does not set `force_reboot`. The
   deployment then relies on the read progress of the installation media alone to
-  detect the end of the first installation stage.
+  detect the end of the first installation stage, so it needs a virtual media
+  device, that streams the media. A BMC, that uploads the media before the server
+  boots, produces no read progress at all, and such a device is refused for this
+  kind of deployment.
 
 Everything, that can be checked up front, is checked when the deployment is
 requested, so an impossible deployment fails right here rather than halfway

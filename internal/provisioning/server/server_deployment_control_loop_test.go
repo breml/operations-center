@@ -212,7 +212,15 @@ func TestServerService_DeploymentControlLoopDrivesDeploymentToATerminalState(t *
 			assertWorld: func(t *testing.T, world *bmcWorld) {
 				t.Helper()
 
-				require.Equal(t, 2, world.mediaResets, "the read progress is dropped when the media is attached and again when it is cleaned up")
+				require.Equal(t, 2, world.mediaResets, "the read progress is dropped when the media is attached and again when the deployment is cleaned up")
+
+				// A server, that does not reboot on its own, is installed and
+				// waiting for the media to go, so the idle period is the whole
+				// latency of the only signal telling the deployment about it.
+				require.LessOrEqual(
+					t, world.mediaEjectedAfter(), deploymentMaxMediaEjectDelay,
+					"the media is ejected right after the installer stopped reading it",
+				)
 			},
 		},
 		{
@@ -229,7 +237,7 @@ func TestServerService_DeploymentControlLoopDrivesDeploymentToATerminalState(t *
 			wantStates:       deploymentStatesHappyPath(),
 			wantStatus:       api.ServerStatusPending,
 			wantStatusDetail: api.ServerStatusDetailPendingRegistering,
-			assertLog:        log.Contains("The BMC reads the installation media from another address"),
+			assertLog:        log.Contains("Installation completed, the installation media has been read and is idle"),
 		},
 		{
 			name:        "success - the BMC uploads the installation media instead of streaming it",
@@ -243,6 +251,38 @@ func TestServerService_DeploymentControlLoopDrivesDeploymentToATerminalState(t *
 			wantStates:       deploymentStatesHappyPath(),
 			wantStatus:       api.ServerStatusPending,
 			wantStatusDetail: api.ServerStatusDetailPendingRegistering,
+		},
+		{
+			name:       "failed - the BMC uploads the installation media, while only its read progress could tell",
+			resolution: deploymentTestResolution(),
+			trackMedia: true,
+			worldOptions: []func(*bmcWorld){
+				func(w *bmcWorld) { w.uploadTransfer = true },
+			},
+			request: func(request *provisioning.ServerDeploymentRequest) {
+				request.Force = true
+			},
+
+			wantStates: slices.Concat(
+				deploymentStatesPreparing,
+				deploymentStatesBIOSPass,
+				deploymentStatesBIOSDeferredPass,
+				deploymentStatesSecureBootOff,
+				deploymentStatesSecureBoot,
+				deploymentStatesMediaCleared,
+				deploymentStatesSecureBootSettle,
+				deploymentStatesInstall[:2],
+				[]api.ServerDeploymentState{api.ServerDeploymentStateFailed},
+			),
+			wantStatus:       api.ServerStatusUnregistered,
+			wantStatusDetail: api.ServerStatusDetailUnregisteredDeploymentFailed,
+			wantFailedState:  api.ServerDeploymentStateWaitMediaAttached,
+			wantLastError:    "uploads the installation media instead of streaming it",
+			assertWorld: func(t *testing.T, world *bmcWorld) {
+				t.Helper()
+
+				require.Equal(t, []string{"system:1"}, world.mediaInserted(), "the failed deployment leaves the installation media attached, the way every failure does")
+			},
 		},
 		{
 			name:        "success - the BMC reports no boot progress",
@@ -308,7 +348,10 @@ func TestServerService_DeploymentControlLoopDrivesDeploymentToATerminalState(t *
 			resolution:  deploymentTestResolution(),
 			trackMedia:  true,
 			worldOptions: []func(*bmcWorld){
-				func(w *bmcWorld) { w.installDuration = config.ServerDeploymentMinInstallDuration / 2 },
+				func(w *bmcWorld) {
+					w.installDuration = config.ServerDeploymentMinInstallDuration / 2
+					w.bootsMediaAgain = true
+				},
 			},
 
 			wantStates:       deploymentStatesHappyPath(),
@@ -322,11 +365,25 @@ func TestServerService_DeploymentControlLoopDrivesDeploymentToATerminalState(t *
 			},
 		},
 		{
+			name:        "success - the BMC caches the installation media instead of streaming it",
+			forceReboot: true,
+			resolution:  deploymentTestResolution(),
+			trackMedia:  true,
+			worldOptions: []func(*bmcWorld){
+				func(w *bmcWorld) { w.cachesMedia = true },
+			},
+
+			wantStates:       deploymentStatesHappyPath(),
+			wantStatus:       api.ServerStatusPending,
+			wantStatusDetail: api.ServerStatusDetailPendingRegistering,
+			assertLog:        log.NotContains("Installation completed, the installation media has been read and is idle"),
+		},
+		{
 			name:        "success - the firmware reboots before the installer even started",
 			forceReboot: true,
 			resolution:  deploymentTestResolution(),
 			worldOptions: []func(*bmcWorld){
-				func(w *bmcWorld) { w.rebootsEarly = true },
+				func(w *bmcWorld) { w.rebootsEarly = true; w.postDuration = worldEarlyRebootDelay + worldBootDuration },
 			},
 
 			wantStates:       deploymentStatesHappyPath(),
@@ -601,6 +658,38 @@ func TestServerService_DeploymentControlLoopDrivesDeploymentToATerminalState(t *
 				require.False(t, world.isPoweredOn(), "a cancelled deployment leaves the server powered off")
 			},
 		},
+		{
+			name:        "cancelled - the BMC completes the ejection after the power off",
+			forceReboot: true,
+			resolution:  deploymentTestResolution(),
+			cancelAt:    api.ServerDeploymentStateWaitInstall,
+			worldOptions: []func(*bmcWorld){
+				func(w *bmcWorld) { w.ejectDelay = worldEjectDelay },
+			},
+
+			wantStates: slices.Concat(
+				deploymentStatesPreparing,
+				deploymentStatesBIOSPass,
+				deploymentStatesBIOSDeferredPass,
+				deploymentStatesSecureBootOff,
+				deploymentStatesSecureBoot,
+				deploymentStatesMediaCleared,
+				deploymentStatesSecureBootSettle,
+				deploymentStatesInstall,
+				deploymentStatesCancel,
+			),
+			wantStatus:       api.ServerStatusUnregistered,
+			wantStatusDetail: api.ServerStatusDetailUnregisteredDeploymentCancelled,
+			assertWorld: func(t *testing.T, world *bmcWorld) {
+				t.Helper()
+
+				require.Empty(
+					t, world.mediaInserted(),
+					"a cancelled deployment waits for the ejection it issued, instead of completing on the power state alone",
+				)
+				require.False(t, world.isPoweredOn(), "a cancelled deployment leaves the server powered off")
+			},
+		},
 	}
 
 	for _, tc := range tests {
@@ -725,6 +814,95 @@ func TestServerService_DeploymentControlLoopSurvivesAServiceRestart(t *testing.T
 	server := driveDeployment(t, ctx, w, false)
 
 	require.Equal(t, deploymentStatesHappyPath(), deploymentStateSequence(server))
+	require.Equal(t, api.ServerStatusPending, server.Status)
+}
+
+// TestServerService_DeploymentControlLoopKeepsTheSecureBootSettleBootAcrossARetry
+// drives the deployment through the enrollment of the secure boot certificates
+// and then rewinds it into the enrollment, the way a crash between the write and
+// the transition, that records it, leaves the deployment behind. The BMC reports
+// the key databases as applied by then, so the re-issued enrollment writes
+// nothing, while the firmware still has the certificates to pick up: the settle
+// boot has to run regardless.
+func TestServerService_DeploymentControlLoopKeepsTheSecureBootSettleBootAcrossARetry(t *testing.T) {
+	ctx := t.Context()
+
+	w := setupDeploymentWorld(t, ctx, deploymentWorldConfig{
+		forceReboot: true,
+		resolution:  deploymentTestResolution(),
+	})
+
+	err := w.service.DeployByName(ctx, worldServerName, deploymentTestRequest(w.tokenUUID))
+	require.NoError(t, err)
+
+	for range deploymentDriveIterations {
+		if w.world.callCount("ApplySecureBootCertificates") > 0 {
+			break
+		}
+
+		server, err := w.repo.GetByName(ctx, worldServerName)
+		require.NoError(t, err)
+
+		before := server.StatusInternal.Deployment.State
+
+		require.NoError(t, w.world.settle(ctx))
+		require.NoError(t, w.service.DeploymentControlLoop(ctx, nil))
+
+		after, err := w.repo.GetByName(ctx, worldServerName)
+		require.NoError(t, err)
+
+		advance := deploymentTick
+		if after.StatusInternal.Deployment.State == before {
+			advance = deploymentIdleTick
+		}
+
+		w.clock.advance(advance)
+	}
+
+	require.Equal(t, 1, w.world.callCount("ApplySecureBootCertificates"), "the enrollment has run once")
+
+	crashed, err := w.repo.GetByName(ctx, worldServerName)
+	require.NoError(t, err)
+
+	deployment := crashed.StatusInternal.Deployment
+	require.True(t, deployment.SecureBootAttempted, "the attempt is recorded before the enrollment writes anything")
+
+	// Everything the enrollment produced is gone, only what was persisted before
+	// it ran is left, and the deployment is back in the trigger state.
+	deployment.State = api.ServerDeploymentStateSecureBoot
+	deployment.SecureBootPending = false
+
+	require.NoError(t, w.repo.Update(ctx, *crashed))
+
+	// The key databases hold the certificates now, so the enrollment leaves them
+	// untouched and reports, that it wrote nothing.
+	w.world.mu.Lock()
+	w.world.secureBootEnrolls = false
+	w.world.mu.Unlock()
+
+	server := driveDeployment(t, ctx, w, false)
+
+	require.Equal(t, 2, w.world.callCount("ApplySecureBootCertificates"), "the enrollment is re-issued")
+
+	states := deploymentStateSequence(server)
+
+	retried := slices.Index(states, api.ServerDeploymentStateSecureBoot)
+	require.NotEqual(t, -1, retried)
+
+	retried = slices.Index(states[retried+1:], api.ServerDeploymentStateSecureBoot) + retried + 1
+
+	require.Equal(
+		t,
+		slices.Concat(
+			deploymentStatesMediaCleared,
+			deploymentStatesSecureBootSettle,
+			deploymentStatesInstall,
+			deploymentStatesFinalize,
+		),
+		states[retried+1:],
+		"the re-issued enrollment keeps the settle boot, since an earlier attempt may have written the key databases",
+	)
+
 	require.Equal(t, api.ServerStatusPending, server.Status)
 }
 

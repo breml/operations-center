@@ -277,7 +277,8 @@ fires first.
    rebooted", so the deployment falls through to the next signal.
 1. **Enough of the installation media has been read and it has gone idle** for
    `ServerDeploymentMediaIdlePeriod`. Operations Center serves the media itself
-   and records the read progress per image and source address.
+   and records the read progress per deployment. Only a deployment requested with
+   `force` is told by this signal.
 1. **An overall timeout** as a backstop, which fails the deployment rather than
    guessing.
 
@@ -293,30 +294,45 @@ a BMC fetches the whole image before the server even boots, and when no progress
 has been recorded at all, which is the case after a daemon restart, since the
 progress is kept in memory only.
 
-**Signals 2 and 3 are both gated on the installation being able to be done at
-all**, so that neither can end the wait while the installer is still running.
-What separates the two cases is the read progress: a firmware, that still has
-something to pick up, reboots the server within the first POST cycles of a boot
-and keeps the media quiet meanwhile, while the installer streams hundreds of
-megabytes of it.
+**Signal 2 is gated on the installer having been running**, so that the reboot,
+that ends the first stage, is not confused with the one the firmware performs to
+pick up staged BIOS attributes or enrolled secure boot certificates. The latter
+comes within the POST cycles of the very boot, that is supposed to start the
+installer, so what separates the two is `BootProgress`: only a boot, that got as
+far as `OSBootStarted`, ran the installer. Where the reboot does not end the
+wait, it re-anchors the snapshot instead, so it is not carried into the next
+comparison. `ServerDeploymentInstallRebootFallbackDelay` stands in for the boot
+progress where the BMC does not report it, and is the only case, in which time
+decides.
 
-**Signal 2 is therefore carried by the read progress.** A reboot ends the wait as
-soon as `ServerDeploymentMediaMinBytesRead` has been read, however long the
-installation took — a machine, that is done in five minutes, is not held back for
-ten. Only where the read progress can not be told at all does
-`ServerDeploymentMinInstallDuration` stand in for it. Where the reboot does not
-end the wait, it re-anchors the snapshot instead, so the firmware reboot is not
-carried into the next comparison.
+**Ejecting has to be prompt.** A server, whose media is still attached when it
+comes back up, can boot it a second time rather than the system just installed,
+where the installer finds no install target anymore and the server never
+registers. The POST of that reboot is the whole budget, which is why signal 2
+must not wait out a duration once it has seen the installer run.
 
-**Signal 3 keeps the floor**, since the media going quiet is a weaker statement
-than a reboot: the installer stops reading while it partitions the disk, and
-ejecting the media then would break the installation. It ends the wait no earlier
-than `ServerDeploymentMinInstallDuration` after entering it.
+**The read progress tells neither signal apart**, since it does not tell the
+installer streaming the media apart from the BMC pulling it in: a BMC, that
+caches the media rather than handing every read through, reads the whole image
+out while the server boots and then goes quiet for the rest of the installation,
+which is exactly what "read out and idle" is supposed to mean. A Dell PowerEdge
+does this, and ejecting the media on that signal breaks the installation with an
+I/O error on the virtual CD.
 
-With `force` — a token seed without `force_reboot` — signal 2 does not fire on
-its own, since the installer waits for the media to disappear instead of
-rebooting. Ejecting the media, which happens right after signal 3, is what makes
-IncusOS reboot in that case.
+**Signal 3 is therefore reserved for `force`** — a token seed without
+`force_reboot` — where the installer waits for the media to disappear instead of
+rebooting, so signal 2 does not fire on its own and ejecting the media is what
+makes IncusOS reboot. A server, that reboots on its own, is told by signals 1
+and 2 alone.
+
+There, `ServerDeploymentMediaIdlePeriod` is the whole latency of the deployment:
+the server has installed and is idling in front of "Please remove the install
+media", and nothing happens until the ejection comes. The period therefore only
+covers a gap within the installation — a Lenovo ThinkSystem reads the media right
+up to the end of the first stage — and is not a place to buy safety margin.
+`ServerDeploymentMinInstallDuration` keeps the floor underneath it, so a BMC,
+that read the media out while the server was still booting, can not end the wait
+before the installation could have run at all.
 
 ### Read progress of the installation media
 

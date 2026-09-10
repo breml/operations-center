@@ -200,68 +200,51 @@ func Test_deploymentStates_callTimeoutIsAlwaysPositive(t *testing.T) {
 	}
 }
 
-func Test_deploymentInstallRebootEndsTheWait(t *testing.T) {
-	readOut := provisioning.SeedImageProgress{
-		Size:         4 * config.ServerDeploymentMediaMinBytesRead,
-		BytesCovered: config.ServerDeploymentMediaMinBytesRead,
-	}
-
-	barelyRead := provisioning.SeedImageProgress{
-		Size:         4 * config.ServerDeploymentMediaMinBytesRead,
-		BytesCovered: config.ServerDeploymentMediaMinBytesRead - 1,
-	}
+func Test_deploymentInstallOSObserved(t *testing.T) {
+	anchored := deploymentTestNow
 
 	tests := []struct {
-		name          string
-		installingFor time.Duration
-		progress      provisioning.SeedImageProgress
-		progressKnown bool
+		name     string
+		snapshot provisioning.ServerDeploymentBMCSnapshot
+		current  api.BMCData
 
 		want bool
 	}{
 		{
-			name:          "media read out before the installation could be done",
-			installingFor: time.Minute,
-			progress:      readOut,
-			progressKnown: true,
-
-			want: true,
-		},
-		{
-			name:          "media barely read before the installation could be done",
-			installingFor: time.Minute,
-			progress:      barelyRead,
-			progressKnown: true,
+			name:     "the BMC reports no boot progress",
+			snapshot: provisioning.ServerDeploymentBMCSnapshot{Taken: anchored},
+			current:  api.BMCData{},
 
 			want: false,
 		},
 		{
-			name:          "read progress can not be told before the installation could be done",
-			installingFor: time.Minute,
-			progress:      readOut,
-			progressKnown: false,
+			name:     "the firmware is still running the power on self test",
+			snapshot: provisioning.ServerDeploymentBMCSnapshot{Taken: anchored},
+			current:  api.BMCData{ServerBootProgress: api.BMCBootProgress{LastState: "MemoryInitializationStarted", LastStateTime: anchored.Add(time.Minute)}},
 
 			want: false,
 		},
 		{
-			name:          "read progress can not be told once the installation could be done",
-			installingFor: config.ServerDeploymentMinInstallDuration,
-			progress:      provisioning.SeedImageProgress{},
-			progressKnown: false,
+			name:     "the installer is running",
+			snapshot: provisioning.ServerDeploymentBMCSnapshot{Taken: anchored},
+			current:  api.BMCData{ServerBootProgress: api.BMCBootProgress{LastState: "OSRunning", LastStateTime: anchored.Add(time.Minute)}},
 
 			want: true,
+		},
+		{
+			name:     "a BMC, that kept the state of the boot before the install wait",
+			snapshot: provisioning.ServerDeploymentBMCSnapshot{Taken: anchored},
+			current:  api.BMCData{ServerBootProgress: api.BMCBootProgress{LastState: "OSRunning", LastStateTime: anchored.Add(-time.Hour)}},
+
+			want: false,
 		},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			deployment := &provisioning.ServerDeployment{
-				StateEnteredAt: deploymentTestNow,
-			}
+			deployment := &provisioning.ServerDeployment{InstallSnapshot: tc.snapshot}
 
-			got := deploymentInstallRebootEndsTheWait(deploymentTestNow.Add(tc.installingFor), deployment, tc.progress, tc.progressKnown)
-
-			require.Equal(t, tc.want, got)
+			require.Equal(t, tc.want, deploymentInstallOSObserved(deployment, tc.current), "only a boot, that ran the installer, may let a reboot end the install wait")
 		})
 	}
 }
@@ -693,6 +676,30 @@ func Test_bmcWaitConditions(t *testing.T) {
 			want: false,
 		},
 		{
+			name:  "the cancellation has powered the server off and ejected the media",
+			state: api.ServerDeploymentStateWaitCancel,
+			data: api.BMCData{
+				ServerPowerState: bmcPowerStateOff,
+				VirtualMedia: map[string]api.BMCVirtualMedia{
+					"system:1": {ID: "system:1"},
+				},
+			},
+
+			want: true,
+		},
+		{
+			name:  "the cancellation has powered the server off, but the media is still inserted",
+			state: api.ServerDeploymentStateWaitCancel,
+			data: api.BMCData{
+				ServerPowerState: bmcPowerStateOff,
+				VirtualMedia: map[string]api.BMCVirtualMedia{
+					"system:1": {ID: "system:1", Inserted: true, Image: "https://oc.example.com:8443/one.iso"},
+				},
+			},
+
+			want: false,
+		},
+		{
 			name:  "no media is inserted",
 			state: api.ServerDeploymentStateWaitMediaCleared,
 			data: api.BMCData{VirtualMedia: map[string]api.BMCVirtualMedia{
@@ -706,24 +713,6 @@ func Test_bmcWaitConditions(t *testing.T) {
 			state: api.ServerDeploymentStateWaitMediaCleared,
 			data: api.BMCData{VirtualMedia: map[string]api.BMCVirtualMedia{
 				"manager:1": {ID: "manager:1", Inserted: true},
-			}},
-
-			want: false,
-		},
-		{
-			name:  "the media holds the image",
-			state: api.ServerDeploymentStateWaitMediaAttached,
-			data: api.BMCData{VirtualMedia: map[string]api.BMCVirtualMedia{
-				"system:1": {ID: "system:1", Inserted: true, Image: "https://oc.example.com:8443/one.iso"},
-			}},
-
-			want: true,
-		},
-		{
-			name:  "the media holds another image",
-			state: api.ServerDeploymentStateWaitMediaAttached,
-			data: api.BMCData{VirtualMedia: map[string]api.BMCVirtualMedia{
-				"system:1": {ID: "system:1", Inserted: true, Image: "https://oc.example.com:8443/other.iso"},
 			}},
 
 			want: false,
@@ -765,22 +754,85 @@ func Test_bmcWaitConditions(t *testing.T) {
 	}
 }
 
-func Test_selectVirtualMediaID(t *testing.T) {
+func Test_deploymentMediaHoldsImage(t *testing.T) {
+	deployment := provisioning.ServerDeployment{
+		Request:  provisioning.ServerDeploymentRequest{VirtualMediaID: "system:1"},
+		MediaURL: "https://oc.example.com:8443/one.iso",
+	}
+
 	tests := []struct {
 		name string
 		data api.BMCData
+
+		want bool
+	}{
+		{
+			name: "the media holds the image",
+			data: api.BMCData{VirtualMedia: map[string]api.BMCVirtualMedia{
+				"system:1": {ID: "system:1", Inserted: true, Image: "https://oc.example.com:8443/one.iso"},
+			}},
+
+			want: true,
+		},
+		{
+			name: "the media holds another image",
+			data: api.BMCData{VirtualMedia: map[string]api.BMCVirtualMedia{
+				"system:1": {ID: "system:1", Inserted: true, Image: "https://oc.example.com:8443/other.iso"},
+			}},
+
+			want: false,
+		},
+		{
+			name: "nothing is inserted",
+			data: api.BMCData{VirtualMedia: map[string]api.BMCVirtualMedia{
+				"system:1": {ID: "system:1"},
+			}},
+
+			want: false,
+		},
+		{
+			name: "the media device is gone",
+			data: api.BMCData{},
+
+			want: false,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			require.Equal(t, tc.want, deploymentMediaHoldsImage(&deployment, tc.data))
+		})
+	}
+}
+
+func Test_selectVirtualMediaID(t *testing.T) {
+	tests := []struct {
+		name             string
+		data             api.BMCData
+		imageType        api.ImageType
+		requireStreaming bool
 
 		want      string
 		assertErr require.ErrorAssertionFunc
 	}{
 		{
-			name: "the only device",
+			name: "the only device takes the image",
 			data: api.BMCData{VirtualMedia: map[string]api.BMCVirtualMedia{
 				"manager:1": {ID: "manager:1", MediaTypes: []string{"USBStick"}},
 			}},
+			imageType: api.ImageTypeRaw,
 
 			want:      "manager:1",
 			assertErr: require.NoError,
+		},
+		{
+			name: "the only device does not take the image",
+			data: api.BMCData{VirtualMedia: map[string]api.BMCVirtualMedia{
+				"manager:1": {ID: "manager:1", MediaTypes: []string{"USBStick"}},
+			}},
+			imageType: api.ImageTypeISO,
+
+			assertErr: errassert.OperationNotPermittedErrorContains(`manager:1 (USBStick)`),
 		},
 		{
 			name: "the only optical device",
@@ -788,13 +840,26 @@ func Test_selectVirtualMediaID(t *testing.T) {
 				"manager:1": {ID: "manager:1", MediaTypes: []string{"USBStick"}},
 				"system:1":  {ID: "system:1", MediaTypes: []string{"CD", "DVD"}},
 			}},
+			imageType: api.ImageTypeISO,
 
 			want:      "system:1",
 			assertErr: require.NoError,
 		},
 		{
-			name: "no device at all",
-			data: api.BMCData{},
+			name: "the same devices, but a raw image needs the USB one",
+			data: api.BMCData{VirtualMedia: map[string]api.BMCVirtualMedia{
+				"manager:1": {ID: "manager:1", MediaTypes: []string{"USBStick"}},
+				"system:1":  {ID: "system:1", MediaTypes: []string{"CD", "DVD"}},
+			}},
+			imageType: api.ImageTypeRaw,
+
+			want:      "manager:1",
+			assertErr: require.NoError,
+		},
+		{
+			name:      "no device at all",
+			data:      api.BMCData{},
+			imageType: api.ImageTypeISO,
 
 			assertErr: errassert.NotFoundError,
 		},
@@ -804,18 +869,20 @@ func Test_selectVirtualMediaID(t *testing.T) {
 				"system:1": {ID: "system:1", MediaTypes: []string{"CD"}},
 				"system:2": {ID: "system:2", MediaTypes: []string{"DVD"}},
 			}},
+			imageType: api.ImageTypeISO,
 
 			want:      "system:1",
 			assertErr: require.NoError,
 		},
 		{
-			name: "several devices, none of them optical",
+			name: "the device saying nothing wins over the one saying it does not take the image",
 			data: api.BMCData{VirtualMedia: map[string]api.BMCVirtualMedia{
 				"manager:1": {ID: "manager:1", MediaTypes: []string{"USBStick"}},
 				"manager:2": {ID: "manager:2"},
 			}},
+			imageType: api.ImageTypeISO,
 
-			want:      "manager:1",
+			want:      "manager:2",
 			assertErr: require.NoError,
 		},
 		{
@@ -824,6 +891,7 @@ func Test_selectVirtualMediaID(t *testing.T) {
 				"manager:1": {ID: "manager:1", MediaTypes: []string{"CD", "DVD"}},
 				"system:2":  {ID: "system:2", MediaTypes: []string{"CD", "DVD"}},
 			}},
+			imageType: api.ImageTypeISO,
 
 			want:      "system:2",
 			assertErr: require.NoError,
@@ -834,16 +902,64 @@ func Test_selectVirtualMediaID(t *testing.T) {
 				"manager:1": {ID: "manager:1", MediaTypes: []string{"CD", "DVD"}},
 				"system:1":  {ID: "system:1", MediaTypes: []string{"USBStick"}},
 			}},
+			imageType: api.ImageTypeISO,
 
 			want:      "manager:1",
 			assertErr: require.NoError,
 		},
 		{
-			name: "no optical device at all, the one of the system wins",
+			name: "no device advertises anything, the one of the system wins",
+			data: api.BMCData{VirtualMedia: map[string]api.BMCVirtualMedia{
+				"manager:1": {ID: "manager:1"},
+				"system:1":  {ID: "system:1"},
+			}},
+			imageType: api.ImageTypeISO,
+
+			want:      "system:1",
+			assertErr: require.NoError,
+		},
+		{
+			name: "a device advertising the media type wins over one advertising nothing",
 			data: api.BMCData{VirtualMedia: map[string]api.BMCVirtualMedia{
 				"manager:1": {ID: "manager:1", MediaTypes: []string{"USBStick"}},
 				"system:1":  {ID: "system:1"},
 			}},
+			imageType: api.ImageTypeRaw,
+
+			want:      "manager:1",
+			assertErr: require.NoError,
+		},
+		{
+			name: "a streaming device wins over an uploading one, when the read progress is needed",
+			data: api.BMCData{VirtualMedia: map[string]api.BMCVirtualMedia{
+				"manager:1": {ID: "manager:1", MediaTypes: []string{"CD", "DVD"}},
+				"system:1":  {ID: "system:1", MediaTypes: []string{"CD", "DVD"}, TransferMethod: "Upload"},
+			}},
+			imageType:        api.ImageTypeISO,
+			requireStreaming: true,
+
+			want:      "manager:1",
+			assertErr: require.NoError,
+		},
+		{
+			name: "the uploading device of the system is preferred, when the read progress is not needed",
+			data: api.BMCData{VirtualMedia: map[string]api.BMCVirtualMedia{
+				"manager:1": {ID: "manager:1", MediaTypes: []string{"CD", "DVD"}},
+				"system:1":  {ID: "system:1", MediaTypes: []string{"CD", "DVD"}, TransferMethod: "Upload"},
+			}},
+			imageType: api.ImageTypeISO,
+
+			want:      "system:1",
+			assertErr: require.NoError,
+		},
+		{
+			name: "an uploading device is picked, when it is the only one taking the image",
+			data: api.BMCData{VirtualMedia: map[string]api.BMCVirtualMedia{
+				"manager:1": {ID: "manager:1", MediaTypes: []string{"USBStick"}},
+				"system:1":  {ID: "system:1", MediaTypes: []string{"CD", "DVD"}, TransferMethod: "Upload"},
+			}},
+			imageType:        api.ImageTypeISO,
+			requireStreaming: true,
 
 			want:      "system:1",
 			assertErr: require.NoError,
@@ -852,7 +968,7 @@ func Test_selectVirtualMediaID(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			got, err := selectVirtualMediaID(tc.data)
+			got, err := selectVirtualMediaID(tc.data, tc.imageType, tc.requireStreaming)
 
 			tc.assertErr(t, err)
 			require.Equal(t, tc.want, got)
@@ -911,6 +1027,20 @@ func Test_deploymentRetryFromError(t *testing.T) {
 	require.False(t, ok, "a plain error carries no state to go back to")
 }
 
+func Test_deploymentFatalError(t *testing.T) {
+	err := error(deploymentFatalError{err: boom.Error})
+
+	require.Equal(t, boom.Error.Error(), err.Error(), "the sentinel reports the message of the error it carries")
+	require.ErrorIs(t, err, boom.Error, "the wrapped error stays inspectable")
+	require.False(t, domain.IsRetryableError(err), "a fatal error is never retried")
+
+	_, ok := errors.AsType[deploymentFatalError](fmt.Errorf("wrapped: %w", err))
+	require.True(t, ok, "the sentinel is found through another wrapping")
+
+	_, ok = errors.AsType[deploymentFatalError](boom.Error)
+	require.False(t, ok, "a plain error does not end the deployment")
+}
+
 // Test_deploymentStates asserts the invariants of the deployment state machine,
 // which the dispatcher relies on but can not check itself.
 func Test_deploymentStates(t *testing.T) {
@@ -918,6 +1048,10 @@ func Test_deploymentStates(t *testing.T) {
 		t.Run(state.String(), func(t *testing.T) {
 			var unmarshalled api.ServerDeploymentState
 			require.NoError(t, unmarshalled.UnmarshalText([]byte(state)), "state %q is not a known deployment state", state)
+
+			if definition.kind != deploymentStateKindAction {
+				require.Nil(t, definition.prepare, "state %q is not an action, but prepares one", state)
+			}
 
 			if definition.kind == deploymentStateKindTerminal {
 				require.True(t, state.IsTerminal(), "terminal state %q does not report itself as terminal", state)
@@ -950,6 +1084,21 @@ func Test_deploymentStates(t *testing.T) {
 			require.Equal(t, deploymentStateKindAction, deploymentStates[definition.fallback].kind, "wait state %q falls back to %q, which is not an action", state, definition.fallback)
 		})
 	}
+}
+
+// Test_deploymentStatesSecureBootRecordsItsAttempt asserts, that the enrollment
+// of the secure boot certificates records, that it is about to run. The record
+// is what tells a re-issued enrollment, that an earlier attempt may have written
+// the key databases already, which the BMC does not report anymore.
+func Test_deploymentStatesSecureBootRecordsItsAttempt(t *testing.T) {
+	prepare := deploymentStates[api.ServerDeploymentStateSecureBoot].prepare
+	require.NotNil(t, prepare, "the enrollment does not record its attempt")
+
+	var deployment provisioning.ServerDeployment
+
+	prepare(&deployment)
+
+	require.True(t, deployment.SecureBootAttempted)
 }
 
 func Test_deploymentStatesAreAllReachable(t *testing.T) {

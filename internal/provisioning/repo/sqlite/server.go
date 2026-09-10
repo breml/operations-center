@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
 	incustls "github.com/lxc/incus/v7/shared/tls"
 
@@ -12,6 +13,7 @@ import (
 	"github.com/FuturFusion/operations-center/internal/provisioning/repo/sqlite/entities"
 	"github.com/FuturFusion/operations-center/internal/sql/sqlite"
 	"github.com/FuturFusion/operations-center/internal/sql/transaction"
+	"github.com/FuturFusion/operations-center/shared/api"
 )
 
 type server struct {
@@ -73,6 +75,53 @@ func (s server) GetAllNames(ctx context.Context) ([]string, error) {
 
 func (s server) GetAllNamesWithFilter(ctx context.Context, filter provisioning.ServerFilter) ([]string, error) {
 	return entities.GetServerNames(ctx, transaction.GetDBTX(ctx, s.db), filter)
+}
+
+// serverNamesWithActiveDeploymentStmt selects the servers, that still have an
+// automated deployment to advance, based on the deployment state (and not
+// the server state).
+var serverNamesWithActiveDeploymentStmt = fmt.Sprintf(`
+SELECT servers.name
+  FROM servers
+  WHERE json_extract(servers.status_internal, '$.deployment.state') IS NOT NULL
+    AND json_extract(servers.status_internal, '$.deployment.state') NOT IN (%s)
+  ORDER BY servers.name
+`, strings.TrimSuffix(strings.Repeat("?, ", len(api.ServerDeploymentTerminalStates())), ", "))
+
+func (s server) GetAllNamesWithActiveDeployment(ctx context.Context) ([]string, error) {
+	terminalStates := api.ServerDeploymentTerminalStates()
+
+	args := make([]any, 0, len(terminalStates))
+	for _, state := range terminalStates {
+		args = append(args, state.String())
+	}
+
+	rows, err := transaction.GetDBTX(ctx, s.db).QueryContext(ctx, serverNamesWithActiveDeploymentStmt, args...)
+	if err != nil {
+		return nil, fmt.Errorf("Failed to get the names of the servers with an active deployment: %w", err)
+	}
+
+	defer func() { _ = rows.Close() }()
+
+	var names []string
+
+	for rows.Next() {
+		var name string
+
+		err = rows.Scan(&name)
+		if err != nil {
+			return nil, fmt.Errorf("Failed to get the names of the servers with an active deployment: %w", err)
+		}
+
+		names = append(names, name)
+	}
+
+	err = rows.Err()
+	if err != nil {
+		return nil, fmt.Errorf("Failed to get the names of the servers with an active deployment: %w", err)
+	}
+
+	return names, nil
 }
 
 func (s server) GetByName(ctx context.Context, name string) (*provisioning.Server, error) {

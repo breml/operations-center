@@ -63,7 +63,7 @@ func (c *cmdServerDeploy) Command() *cobra.Command {
   to stop a deployment.
 `
 
-	cmd.Flags().StringVar(&c.flagVirtualMediaID, "virtual-media-id", "", `Virtual media device to attach the installation media to, e.g. "system:1". Defaults to the first CD/DVD device of the server, preferring the ones offered by the system`)
+	cmd.Flags().StringVar(&c.flagVirtualMediaID, "virtual-media-id", "", `Virtual media device to attach the installation media to, e.g. "system:1". Defaults to the first device of the server taking the requested image type, preferring the ones offered by the system`)
 	cmd.Flags().StringVar(&c.flagType, "type", "iso", "type of image (iso|raw)")
 	cmd.Flags().StringVar(&c.flagArchitecture, "architecture", "x86_64", "CPU architecture for the image (x86_64|aarch64)")
 	cmd.Flags().StringVar(&c.flagChannel, "channel", "", "Channel, the most recent update should be taken from to generate the image")

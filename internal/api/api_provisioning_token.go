@@ -846,10 +846,13 @@ func (t *tokenHandler) tokenSeedGet(r *http.Request) response.Response {
 //	    name: params
 //	    description: |-
 //	      Flat sequence of "<key>/<value>" pairs (architecture, type,
-//	      optionally channel) followed by a filename segment, e.g.
-//	      "architecture/x86_64/type/iso/file.iso" for the image the token seed
-//	      resolves to, or "architecture/x86_64/type/iso/a1B2c3D4e5F6.iso" for
-//	      one already generated image.
+//	      optionally channel and deployment) followed by a filename segment,
+//	      e.g. "architecture/x86_64/type/iso/file.iso" for the image the token
+//	      seed resolves to, or "architecture/x86_64/type/iso/a1B2c3D4e5F6.iso"
+//	      for one already generated image. A "deployment" pair names the
+//	      automated deployment reading the image, which does not change, which
+//	      image is served, it only tells the readers of one and the same image
+//	      apart.
 //	    type: string
 //	    required: true
 //	  - in: header
@@ -898,21 +901,20 @@ func (t *tokenHandler) tokenSeedImageGet(r *http.Request) response.Response {
 
 	name := r.PathValue("name")
 
-	imageType, architecture, channel, fingerprintID, err := parseSeedImageParams(r.PathValue("params"))
+	params, err := parseSeedImageParams(r.PathValue("params"))
 	if err != nil {
 		return response.BadRequest(err)
 	}
 
-	if fingerprintID != "" {
-		image, err := t.service.GetPreparedTokenSeedImage(r.Context(), UUID, name, imageType, architecture, channel, fingerprintID)
+	imageType, architecture, channel := params.imageType, params.architecture, params.channel
+
+	if params.fingerprintID != "" {
+		image, err := t.service.GetPreparedTokenSeedImage(r.Context(), UUID, name, imageType, architecture, channel, params.fingerprintID)
 		if err != nil {
 			return response.SmartError(err)
 		}
 
-		content := t.trackSeedImageRead(r, provisioning.SeedImageID{
-			CacheID:       provisioning.SeedImageCacheID(UUID, name, imageType, architecture, channel),
-			FingerprintID: fingerprintID,
-		}, image.SeedImageInfo, image.Content)
+		content := t.trackSeedImageRead(r, params.deploymentID, image.SeedImageInfo, image.Content)
 
 		return response.ServeContentResponse(r, content, image.Filename, image.ModTime, image.Size, nil)
 	}
@@ -957,21 +959,33 @@ func (t *tokenHandler) tokenSeedImageGet(r *http.Request) response.Response {
 // http.ServeContent answers a range request by seeking, which only the image
 // underneath it sees as reads.
 //
-// Only a request naming an already prepared image is tracked, since that is the
-// only address a BMC is ever pointed at, see BMCAttachMediaByName. A request
-// naming a token seed serves a CLI or UI download instead, which tells nothing
-// about an installation.
+// Only a request naming an already prepared image and the deployment reading it
+// is tracked.
 //
 // A request arriving through a trusted HTTPS proxy carries the address of the
 // real peer, since such a proxy speaks the PROXY protocol to the listener.
-func (t *tokenHandler) trackSeedImageRead(r *http.Request, imageID provisioning.SeedImageID, info provisioning.SeedImageInfo, content io.ReadSeekCloser) io.ReadSeekCloser {
-	return t.seedProgress.Track(r.Context(), imageID, provisioning.SeedImageSource(r.RemoteAddr), info, content)
+func (t *tokenHandler) trackSeedImageRead(r *http.Request, deploymentID string, info provisioning.SeedImageInfo, content io.ReadSeekCloser) io.ReadSeekCloser {
+	if deploymentID == "" {
+		return content
+	}
+
+	return t.seedProgress.Track(r.Context(), deploymentID, info, content)
 }
 
-// seedImageFingerprintIDRegexp matches the terminal filename segment naming an
-// already generated image. The segment ends up addressing a file, so nothing
-// but the shape provisioning.SeedImageFingerprintID produces is let through.
-var seedImageFingerprintIDRegexp = regexp.MustCompile(`^[A-Za-z0-9_-]{12}$`)
+// seedImageIDRegexp matches the segments naming an already generated image and
+// the deployment reading it. The first ends up addressing a file, so nothing but
+// the shape provisioning.SeedImageFingerprintID produces is let through.
+var seedImageIDRegexp = regexp.MustCompile(`^[A-Za-z0-9_-]{12}$`)
+
+// seedImageParams is what the "/{params...}" tail of the token seed image route
+// addresses.
+type seedImageParams struct {
+	imageType     api.ImageType
+	architecture  images.UpdateFileArchitecture
+	channel       string
+	fingerprintID string
+	deploymentID  string
+}
 
 // parseSeedImageParams parses the "/{params...}" tail of the token seed image
 // route. params is a flat sequence of "<key>/<value>" pairs followed by a final
@@ -979,22 +993,24 @@ var seedImageFingerprintIDRegexp = regexp.MustCompile(`^[A-Za-z0-9_-]{12}$`)
 //
 // That last segment tells the two ways of asking for an image apart. A segment
 // naming one already generated image is returned as fingerprintID.
-func parseSeedImageParams(params string) (imageType api.ImageType, architecture images.UpdateFileArchitecture, channel string, fingerprintID string, err error) {
+func parseSeedImageParams(params string) (seedImageParams, error) {
 	segments := strings.Split(strings.Trim(params, "/"), "/")
 	if len(segments) < 2 {
-		return "", "", "", "", fmt.Errorf("Missing parameters in seed image path %q", params)
+		return seedImageParams{}, fmt.Errorf("Missing parameters in seed image path %q", params)
 	}
 
 	filename := segments[len(segments)-1]
 	segments = segments[:len(segments)-1]
 
+	var parsed seedImageParams
+
 	basename := strings.TrimSuffix(filename, filepath.Ext(filename))
-	if seedImageFingerprintIDRegexp.MatchString(basename) {
-		fingerprintID = basename
+	if seedImageIDRegexp.MatchString(basename) {
+		parsed.fingerprintID = basename
 	}
 
 	if len(segments)%2 != 0 {
-		return "", "", "", "", fmt.Errorf("Seed image path %q has an odd number of key/value segments", params)
+		return seedImageParams{}, fmt.Errorf("Seed image path %q has an odd number of key/value segments", params)
 	}
 
 	values := map[string]string{}
@@ -1003,41 +1019,49 @@ func parseSeedImageParams(params string) (imageType api.ImageType, architecture 
 
 		_, exists := values[key]
 		if exists {
-			return "", "", "", "", fmt.Errorf("Duplicate parameter %q in seed image path", key)
+			return seedImageParams{}, fmt.Errorf("Duplicate parameter %q in seed image path", key)
 		}
 
 		switch key {
-		case "architecture", "channel", "type":
+		case "architecture", "channel", "deployment", "type":
 			values[key] = segments[i+1]
 
 		default:
-			return "", "", "", "", fmt.Errorf("Unknown parameter %q in seed image path", key)
+			return seedImageParams{}, fmt.Errorf("Unknown parameter %q in seed image path", key)
 		}
 	}
 
 	typeArg, ok := values["type"]
 	if !ok {
-		return "", "", "", "", fmt.Errorf("Missing required parameter %q in seed image path", "type")
+		return seedImageParams{}, fmt.Errorf("Missing required parameter %q in seed image path", "type")
 	}
 
-	imageType = api.ImageType(typeArg)
-	if !imageType.IsValid() {
-		return "", "", "", "", fmt.Errorf("Image type %q is not valid", typeArg)
+	parsed.imageType = api.ImageType(typeArg)
+	if !parsed.imageType.IsValid() {
+		return seedImageParams{}, fmt.Errorf("Image type %q is not valid", typeArg)
 	}
 
 	architectureArg, ok := values["architecture"]
 	if !ok {
-		return "", "", "", "", fmt.Errorf("Missing required parameter %q in seed image path", "architecture")
+		return seedImageParams{}, fmt.Errorf("Missing required parameter %q in seed image path", "architecture")
 	}
 
-	architecture = images.UpdateFileArchitecture(architectureArg)
+	parsed.architecture = images.UpdateFileArchitecture(architectureArg)
 
-	_, ok = images.UpdateFileArchitectures[architecture]
+	_, ok = images.UpdateFileArchitectures[parsed.architecture]
 	if !ok {
-		return "", "", "", "", fmt.Errorf("Architecture %q is not valid", architectureArg)
+		return seedImageParams{}, fmt.Errorf("Architecture %q is not valid", architectureArg)
 	}
 
-	return imageType, architecture, values["channel"], fingerprintID, nil
+	deploymentArg, ok := values["deployment"]
+	if ok && !seedImageIDRegexp.MatchString(deploymentArg) {
+		return seedImageParams{}, fmt.Errorf("Deployment ID %q is not valid", deploymentArg)
+	}
+
+	parsed.channel = values["channel"]
+	parsed.deploymentID = deploymentArg
+
+	return parsed, nil
 }
 
 // swagger:operation PUT /1.0/provisioning/tokens/{uuid}/seeds/{name} tokens token_seed_put

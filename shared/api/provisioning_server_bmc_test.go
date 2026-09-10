@@ -9,6 +9,28 @@ import (
 	"github.com/FuturFusion/operations-center/shared/api"
 )
 
+func TestBMCBootProgressHandedOverToOS(t *testing.T) {
+	tests := []struct {
+		name  string
+		state string
+
+		want bool
+	}{
+		{name: "no state reported", state: "", want: false},
+		{name: "the firmware is still initializing", state: "PrimaryProcessorInitializationStarted", want: false},
+		{name: "the last state before the hand over", state: "SetupEntered", want: false},
+		{name: "the operating system is being started", state: "OSBootStarted", want: true},
+		{name: "the operating system is running", state: "OSRunning", want: true},
+		{name: "a state carrying no ordering information", state: "OEM", want: false},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			require.Equal(t, tc.want, api.BMCBootProgressHandedOverToOS(tc.state), "only a boot, that got as far as starting the operating system, has run the installer")
+		})
+	}
+}
+
 func TestBMCHasRebootedSince(t *testing.T) {
 	since := time.Date(2026, 8, 26, 10, 0, 0, 0, time.UTC)
 

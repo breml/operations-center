@@ -70,6 +70,14 @@ func Contains(want string) func(t TestifyT, logBuf *bytes.Buffer) {
 	}
 }
 
+func NotContains(unwanted string) func(t TestifyT, logBuf *bytes.Buffer) {
+	return func(t TestifyT, logBuf *bytes.Buffer) {
+		t.Helper()
+
+		require.NotContains(t, logBuf.String(), unwanted)
+	}
+}
+
 func Match(expr string) func(t TestifyT, logBuf *bytes.Buffer) {
 	return func(t TestifyT, logBuf *bytes.Buffer) {
 		t.Helper()

@@ -112,23 +112,33 @@ func (i ImageType) UpdateFileType() images.UpdateFileType {
 // media extension, for the sake of BMC firmware that validates the format of
 // the virtual media Image URI.
 func TokenSeedImagePathSegments(imageType ImageType, architecture images.UpdateFileArchitecture, channel string) []string {
-	return tokenSeedImagePathSegments(imageType, architecture, channel, "file")
+	return tokenSeedImagePathSegments(imageType, architecture, channel, "", "file")
 }
 
 // TokenSeedPreparedImagePathSegments returns the path segments addressing one
 // already generated pre-seeded image of a token seed, e.g.
 // "architecture/x86_64/channel/stable/type/iso/a1B2c3D4e5F6.iso".
-func TokenSeedPreparedImagePathSegments(imageType ImageType, architecture images.UpdateFileArchitecture, channel string, fingerprintID string) []string {
-	return tokenSeedImagePathSegments(imageType, architecture, channel, fingerprintID)
+//
+// A non empty deploymentID adds a "deployment/<id>" pair, e.g.
+// "architecture/x86_64/deployment/f6E5d4C3b2A1/type/iso/a1B2c3D4e5F6.iso". It
+// does not address anything, the very same image is served with and without it.
+// It only lets the server tell the deployment reading the image apart from every
+// other reader of the same bytes.
+func TokenSeedPreparedImagePathSegments(imageType ImageType, architecture images.UpdateFileArchitecture, channel string, deploymentID string, fingerprintID string) []string {
+	return tokenSeedImagePathSegments(imageType, architecture, channel, deploymentID, fingerprintID)
 }
 
-func tokenSeedImagePathSegments(imageType ImageType, architecture images.UpdateFileArchitecture, channel string, filename string) []string {
+func tokenSeedImagePathSegments(imageType ImageType, architecture images.UpdateFileArchitecture, channel string, deploymentID string, filename string) []string {
 	segments := []string{
 		"architecture", architecture.String(),
 	}
 
 	if channel != "" {
 		segments = append(segments, "channel", url.PathEscape(channel))
+	}
+
+	if deploymentID != "" {
+		segments = append(segments, "deployment", url.PathEscape(deploymentID))
 	}
 
 	segments = append(

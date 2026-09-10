@@ -14,7 +14,6 @@ import (
 	adapterMock "github.com/FuturFusion/operations-center/internal/provisioning/adapter/mock"
 	repoMock "github.com/FuturFusion/operations-center/internal/provisioning/repo/mock"
 	provisioningServer "github.com/FuturFusion/operations-center/internal/provisioning/server"
-	"github.com/FuturFusion/operations-center/internal/util/ptr"
 	"github.com/FuturFusion/operations-center/internal/util/testing/boom"
 	"github.com/FuturFusion/operations-center/shared/api"
 )
@@ -96,18 +95,8 @@ func deploymentBlockedTestRepo(store *deploymentServerStore) *repoMock.ServerRep
 		GetByNameFunc: func(ctx context.Context, name string) (*provisioning.Server, error) {
 			return store.get(name)
 		},
-		GetAllWithFilterFunc: func(ctx context.Context, filter provisioning.ServerFilter) (provisioning.Servers, error) {
-			var matching provisioning.Servers
-
-			for _, server := range store.all() {
-				if ptr.From(filter.Status) != server.Status {
-					continue
-				}
-
-				matching = append(matching, server)
-			}
-
-			return matching, nil
+		GetAllNamesWithActiveDeploymentFunc: func(ctx context.Context) ([]string, error) {
+			return store.namesWithActiveDeployment(), nil
 		},
 		UpdateFunc: func(ctx context.Context, in provisioning.Server) error {
 			store.put(in)
