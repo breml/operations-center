@@ -68,6 +68,7 @@ type serverService struct {
 	selfUpdateSignal signals.Signal[provisioning.Server]
 
 	rebootStatusUpdateGracePeriod time.Duration
+	rollingUpdateStepRetryBackoff time.Duration
 
 	backgroundTasks sync.WaitGroup
 }
@@ -97,6 +98,12 @@ func WithWarningEmitter(warn provisioning.WarningServicePort) Option {
 func WithRebootStatusUpdateGracePeriod(rebootStatusUpdateGracePeriod time.Duration) Option {
 	return func(s *serverService) {
 		s.rebootStatusUpdateGracePeriod = rebootStatusUpdateGracePeriod
+	}
+}
+
+func WithRollingUpdateStepRetryBackoff(rollingUpdateStepRetryBackoff time.Duration) Option {
+	return func(s *serverService) {
+		s.rollingUpdateStepRetryBackoff = rollingUpdateStepRetryBackoff
 	}
 }
 
@@ -159,6 +166,7 @@ func New(
 		selfUpdateSignal: signals.New[provisioning.Server](),
 
 		rebootStatusUpdateGracePeriod: rebootStatusUpdateGracePeriod,
+		rollingUpdateStepRetryBackoff: config.ClusterRollingUpdateStepRetryBackoff,
 	}
 
 	for _, opt := range opts {
@@ -1257,7 +1265,7 @@ func (s *serverService) EvacuateSystemByName(ctx context.Context, name string, c
 
 	err = s.client.Evacuate(ctx, *server, callback)
 	if err != nil {
-		previousServer.StatusInternal.Update.Fail(provisioning.ServerUpdateStepEvacuate, err)
+		previousServer.StatusInternal.Update.Fail(s.now(), provisioning.ServerUpdateStepEvacuate, err)
 
 		return fmt.Errorf("Failed to evacuate server %q by name: %w", name, err)
 	}
@@ -1385,7 +1393,7 @@ func (s *serverService) RebootSystemByName(ctx context.Context, name string, for
 
 	err = s.client.Reboot(ctx, *server)
 	if err != nil {
-		previousServer.StatusInternal.Update.Fail(provisioning.ServerUpdateStepReboot, err)
+		previousServer.StatusInternal.Update.Fail(s.now(), provisioning.ServerUpdateStepReboot, err)
 
 		return fmt.Errorf("Failed to reboot server %q by name: %w", name, err)
 	}
@@ -1485,7 +1493,7 @@ func (s *serverService) RestoreSystemByName(ctx context.Context, name string, cl
 
 	err = s.client.Restore(ctx, *server, restoreModeSkip, callback)
 	if err != nil {
-		previousServer.StatusInternal.Update.Fail(provisioning.ServerUpdateStepRestore, err)
+		previousServer.StatusInternal.Update.Fail(s.now(), provisioning.ServerUpdateStepRestore, err)
 
 		return fmt.Errorf("Failed to restore server %q by name: %w", name, err)
 	}
@@ -1688,7 +1696,7 @@ func (s *serverService) UpdateSystemByName(ctx context.Context, name string, upd
 	if updateRequest.OS.TriggerUpdate {
 		err = s.client.UpdateOS(ctx, *server)
 		if err != nil {
-			previousServer.StatusInternal.Update.Fail(provisioning.ServerUpdateStepUpdate, err)
+			previousServer.StatusInternal.Update.Fail(s.now(), provisioning.ServerUpdateStepUpdate, err)
 
 			return fmt.Errorf("Failed to update the OS of server %q by name: %w", name, err)
 		}
@@ -1697,7 +1705,7 @@ func (s *serverService) UpdateSystemByName(ctx context.Context, name string, upd
 	for _, application := range applications {
 		err = s.client.UpdateApplication(ctx, *server, application)
 		if err != nil {
-			previousServer.StatusInternal.Update.Fail(provisioning.ServerUpdateStepUpdate, err)
+			previousServer.StatusInternal.Update.Fail(s.now(), provisioning.ServerUpdateStepUpdate, err)
 
 			return fmt.Errorf("Failed to update application %q of server %q by name: %w", application, name, err)
 		}
