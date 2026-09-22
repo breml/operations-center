@@ -639,6 +639,7 @@ func (_d ServerServiceWithSlog) BMCServerSetLocationIndicatorByName(ctx context.
 
 // BeginUpdateRunByCluster implements provisioning.ServerService.
 func (_d ServerServiceWithSlog) BeginUpdateRunByCluster(ctx context.Context, clusterName string, rebootPending bool) (err error) {
+	ctx = logger.ContextWithComponent(ctx, _d._component)
 	log := slog.With()
 	if slog.Default().Enabled(ctx, logger.LevelTrace) {
 		log = log.With(
@@ -816,6 +817,7 @@ func (_d ServerServiceWithSlog) DeploymentControlLoop(ctx context.Context, serve
 
 // EndUpdateRunByCluster implements provisioning.ServerService.
 func (_d ServerServiceWithSlog) EndUpdateRunByCluster(ctx context.Context, clusterName string) (err error) {
+	ctx = logger.ContextWithComponent(ctx, _d._component)
 	log := slog.With()
 	if slog.Default().Enabled(ctx, logger.LevelTrace) {
 		log = log.With(
