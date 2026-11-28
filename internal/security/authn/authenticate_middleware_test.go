@@ -1,6 +1,8 @@
 package authn_test
 
 import (
+	"crypto/tls"
+	"crypto/x509"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -251,33 +253,167 @@ func (headerAuther) Auth(_ http.ResponseWriter, r *http.Request) (bool, string, 
 }
 
 func TestAuthenticator_Middleware_starting(t *testing.T) {
+	t.Parallel()
+
+	authenticationRequired := func(*http.Request) bool { return true }
+	authenticationExempt := func(*http.Request) bool { return false }
+	authenticationReported := func(*http.Request) bool { return true }
+	authenticationNotReported := func(*http.Request) bool { return false }
+
+	withTrusted := func(r *http.Request) { r.Header.Set("X-Trusted", "1") }
+	withoutCredentials := func(*http.Request) {}
+	withClientCertificate := func(r *http.Request) {
+		r.TLS = &tls.ConnectionState{PeerCertificates: []*x509.Certificate{{}}}
+	}
+
+	withAuthorizationHeader := func(r *http.Request) { r.Header.Set("Authorization", "Bearer token") }
+	withOIDCCookie := func(r *http.Request) { r.AddCookie(&http.Cookie{Name: authn.OIDCAccessCookieName, Value: "token"}) }
+
+	const (
+		nextHandlerCalled = "next handler called"
+		tooEarlyBody      = `"error_code":425,"error":"Operations Center is still starting"`
+		unauthorizedBody  = `"error_code":401,"error":"Unauthorized"`
+	)
+
 	tests := []struct {
-		name     string
-		opts     []authn.Option
-		trusted  bool
-		wantCode int
+		name                     string
+		opts                     []authn.Option
+		isAuthenticationRequired func(*http.Request) bool
+		isAuthenticationReported func(*http.Request) bool
+		prepareRequest           func(r *http.Request)
+
+		wantStatusCode int
+		wantBody       string
 	}{
-		{name: "starting - trusted request", opts: []authn.Option{authn.WithStarting()}, trusted: true, wantCode: http.StatusOK},
-		{name: "starting - untrusted request", opts: []authn.Option{authn.WithStarting()}, wantCode: http.StatusTooEarly},
-		{name: "started - untrusted request", wantCode: http.StatusUnauthorized},
+		{
+			name:                     "starting - authentication required - trusted",
+			opts:                     []authn.Option{authn.WithStarting()},
+			isAuthenticationRequired: authenticationRequired,
+			isAuthenticationReported: authenticationNotReported,
+			prepareRequest:           withTrusted,
+
+			wantStatusCode: http.StatusOK,
+			wantBody:       nextHandlerCalled,
+		},
+		{
+			name:                     "starting - authentication required - no credentials",
+			opts:                     []authn.Option{authn.WithStarting()},
+			isAuthenticationRequired: authenticationRequired,
+			isAuthenticationReported: authenticationNotReported,
+			prepareRequest:           withoutCredentials,
+
+			wantStatusCode: http.StatusTooEarly,
+			wantBody:       tooEarlyBody,
+		},
+		{
+			name:                     "starting - authentication exempt - reported - no credentials",
+			opts:                     []authn.Option{authn.WithStarting()},
+			isAuthenticationRequired: authenticationExempt,
+			isAuthenticationReported: authenticationReported,
+			prepareRequest:           withoutCredentials,
+
+			wantStatusCode: http.StatusOK,
+			wantBody:       nextHandlerCalled,
+		},
+		{
+			name:                     "starting - authentication exempt - reported - trusted with client certificate",
+			opts:                     []authn.Option{authn.WithStarting()},
+			isAuthenticationRequired: authenticationExempt,
+			isAuthenticationReported: authenticationReported,
+			prepareRequest: func(r *http.Request) {
+				withTrusted(r)
+				withClientCertificate(r)
+			},
+
+			wantStatusCode: http.StatusOK,
+			wantBody:       nextHandlerCalled,
+		},
+		{
+			name:                     "starting - authentication exempt - reported - client certificate",
+			opts:                     []authn.Option{authn.WithStarting()},
+			isAuthenticationRequired: authenticationExempt,
+			isAuthenticationReported: authenticationReported,
+			prepareRequest:           withClientCertificate,
+
+			wantStatusCode: http.StatusTooEarly,
+			wantBody:       tooEarlyBody,
+		},
+		{
+			name:                     "starting - authentication exempt - reported - authorization header",
+			opts:                     []authn.Option{authn.WithStarting()},
+			isAuthenticationRequired: authenticationExempt,
+			isAuthenticationReported: authenticationReported,
+			prepareRequest:           withAuthorizationHeader,
+
+			wantStatusCode: http.StatusTooEarly,
+			wantBody:       tooEarlyBody,
+		},
+		{
+			name:                     "starting - authentication exempt - reported - OIDC cookie",
+			opts:                     []authn.Option{authn.WithStarting()},
+			isAuthenticationRequired: authenticationExempt,
+			isAuthenticationReported: authenticationReported,
+			prepareRequest:           withOIDCCookie,
+
+			wantStatusCode: http.StatusTooEarly,
+			wantBody:       tooEarlyBody,
+		},
+		{
+			name:                     "starting - authentication exempt - not reported - client certificate",
+			opts:                     []authn.Option{authn.WithStarting()},
+			isAuthenticationRequired: authenticationExempt,
+			isAuthenticationReported: authenticationNotReported,
+			prepareRequest:           withClientCertificate,
+
+			wantStatusCode: http.StatusOK,
+			wantBody:       nextHandlerCalled,
+		},
+		{
+			name:                     "started - authentication required - no credentials",
+			opts:                     nil,
+			isAuthenticationRequired: authenticationRequired,
+			isAuthenticationReported: authenticationNotReported,
+			prepareRequest:           withoutCredentials,
+
+			wantStatusCode: http.StatusUnauthorized,
+			wantBody:       unauthorizedBody,
+		},
+		{
+			name:                     "started - authentication exempt - reported - client certificate",
+			opts:                     nil,
+			isAuthenticationRequired: authenticationExempt,
+			isAuthenticationReported: authenticationReported,
+			prepareRequest:           withClientCertificate,
+
+			wantStatusCode: http.StatusOK,
+			wantBody:       nextHandlerCalled,
+		},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			// Setup
 			authenticator := authn.New([]authn.Auther{headerAuther{}}, tc.opts...)
-			handler := authenticator.Middleware()(func(w http.ResponseWriter, _ *http.Request) {
-				w.WriteHeader(http.StatusOK)
+			handler := authenticator.Middleware(
+				authn.WithIsAuthenticationRequired(tc.isAuthenticationRequired),
+				authn.WithIsAuthenticationReported(tc.isAuthenticationReported),
+			)(func(w http.ResponseWriter, _ *http.Request) {
+				_, _ = w.Write([]byte(nextHandlerCalled))
 			})
 
-			r := httptest.NewRequest(http.MethodGet, "/1.0", nil)
-			if tc.trusted {
-				r.Header.Set("X-Trusted", "1")
-			}
+			r := httptest.NewRequest(http.MethodGet, "/1.0", http.NoBody)
+			tc.prepareRequest(r)
 
 			w := httptest.NewRecorder()
+
+			// Run test
 			handler(w, r)
 
-			require.Equal(t, tc.wantCode, w.Code)
+			// Assert
+			require.Equal(t, tc.wantStatusCode, w.Code, "unexpected status code, body: %s", w.Body.String())
+			require.Contains(t, w.Body.String(), tc.wantBody, "unexpected response body")
 		})
 	}
 }

@@ -16,12 +16,22 @@ type MiddlewareOption func(c *middlewareConfig)
 
 type middlewareConfig struct {
 	isAuthenticationRequired func(r *http.Request) bool
+	isAuthenticationReported func(r *http.Request) bool
 	isContentTypeCheckExempt func(r *http.Request) bool
 }
 
 func WithIsAuthenticationRequired(isAuthenticationRequired func(r *http.Request) bool) MiddlewareOption {
 	return func(c *middlewareConfig) {
 		c.isAuthenticationRequired = isAuthenticationRequired
+	}
+}
+
+// WithIsAuthenticationReported sets a function, which reports requests that
+// return the trust state of the client. While starting, these requests get
+// 425 Too Early if they present credentials.
+func WithIsAuthenticationReported(isAuthenticationReported func(r *http.Request) bool) MiddlewareOption {
+	return func(c *middlewareConfig) {
+		c.isAuthenticationReported = isAuthenticationReported
 	}
 }
 
@@ -47,6 +57,7 @@ func WithIsContentTypeCheckExempt(isContentTypeCheckExempt func(r *http.Request)
 func (a *Authenticator) Middleware(opts ...MiddlewareOption) func(next http.HandlerFunc) http.HandlerFunc {
 	cfg := &middlewareConfig{
 		isAuthenticationRequired: func(r *http.Request) bool { return true },
+		isAuthenticationReported: func(r *http.Request) bool { return false },
 		isContentTypeCheckExempt: func(r *http.Request) bool { return false },
 	}
 
@@ -119,7 +130,8 @@ func (a *Authenticator) Middleware(opts ...MiddlewareOption) func(next http.Hand
 				}
 			}
 
-			if cfg.isAuthenticationRequired(r) && !trusted && current.starting {
+			// While starting, credentials can not be checked yet. Do not report them as untrusted.
+			if !trusted && current.starting && (cfg.isAuthenticationRequired(r) || (cfg.isAuthenticationReported(r) && hasCredentials(r))) {
 				renderStarting(logCtx, w, r)
 				return
 			}
@@ -159,4 +171,21 @@ func renderStarting(ctx context.Context, w http.ResponseWriter, r *http.Request)
 	if err != nil {
 		slog.WarnContext(ctx, "Render error response failed", logger.Err(err))
 	}
+}
+
+// OIDCAccessCookieName is the name of the cookie with the OIDC access token.
+const OIDCAccessCookieName = "oidc_access"
+
+func hasCredentials(r *http.Request) bool {
+	if r.TLS != nil && len(r.TLS.PeerCertificates) > 0 {
+		return true
+	}
+
+	if r.Header.Get("Authorization") != "" {
+		return true
+	}
+
+	_, err := r.Cookie(OIDCAccessCookieName)
+
+	return err == nil
 }

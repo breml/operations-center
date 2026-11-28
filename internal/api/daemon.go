@@ -219,7 +219,7 @@ func (d *dbtxWrapper) QueryRowContext(ctx context.Context, query string, args ..
 type startingAuthorizer struct{}
 
 func (startingAuthorizer) CheckPermission(context.Context, *authz.RequestDetails, authz.Object, authz.Entitlement) error {
-	return api.StatusErrorf(http.StatusTooEarly, "Daemon is still starting")
+	return api.StatusErrorf(http.StatusTooEarly, "Operations Center is still starting")
 }
 
 func NewDaemon(ctx context.Context, env environment) *Daemon {
@@ -893,6 +893,7 @@ func (d *Daemon) securityConfigReload(ctx context.Context, cfg apisystem.Securit
 		),
 	)
 
+	// Apply valid authers even on error so one broken setting does not block all clients.
 	d.authenticator.Replace(authn.New(authers))
 
 	authorizers := []authz.Authorizer{
@@ -1429,8 +1430,13 @@ func (d *Daemon) setupAPIRoutes(
 		AllowCredentials: false,
 	}))
 
+	isAuthenticationReported := func(r *http.Request) bool {
+		return r.Method == http.MethodGet && r.URL.Path == "/1.0"
+	}
+
 	authenticatorMiddleware := d.authenticator.Middleware(
 		authn.WithIsAuthenticationRequired(isAuthenticationRequired),
+		authn.WithIsAuthenticationReported(isAuthenticationReported),
 		authn.WithIsContentTypeCheckExempt(isContentTypeCheckExempt),
 	)
 

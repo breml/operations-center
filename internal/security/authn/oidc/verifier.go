@@ -18,6 +18,7 @@ import (
 	"github.com/zitadel/oidc/v3/pkg/oidc"
 	"github.com/zitadel/oidc/v3/pkg/op"
 
+	"github.com/FuturFusion/operations-center/internal/security/authn"
 	"github.com/FuturFusion/operations-center/internal/util/logger"
 )
 
@@ -74,7 +75,7 @@ func (o *Verifier) Auth(ctx context.Context, w http.ResponseWriter, r *http.Requ
 		token = parts[1]
 	} else {
 		// When not using a Bearer token, fetch the equivalent from a cookie and move on with it.
-		cookie, err := r.Cookie("oidc_access")
+		cookie, err := r.Cookie(authn.OIDCAccessCookieName)
 		if err != nil {
 			return "", &AuthError{err}
 		}
@@ -112,7 +113,7 @@ func (o *Verifier) Auth(ctx context.Context, w http.ResponseWriter, r *http.Requ
 		if w != nil {
 			// Update the access token cookie.
 			accessCookie := http.Cookie{
-				Name:     "oidc_access",
+				Name:     authn.OIDCAccessCookieName,
 				Value:    tokens.AccessToken,
 				Path:     "/",
 				Secure:   true,
@@ -188,7 +189,7 @@ func (o *Verifier) Logout(w http.ResponseWriter, r *http.Request) {
 
 	// Access token.
 	accessCookie := http.Cookie{
-		Name:     "oidc_access",
+		Name:     authn.OIDCAccessCookieName,
 		Path:     "/",
 		Secure:   true,
 		HttpOnly: false,
@@ -233,7 +234,7 @@ func (o *Verifier) Callback(w http.ResponseWriter, r *http.Request) {
 	handler := rp.CodeExchangeHandler(func(w http.ResponseWriter, r *http.Request, tokens *oidc.Tokens[*oidc.IDTokenClaims], state string, rp rp.RelyingParty) {
 		// Access token.
 		accessCookie := http.Cookie{
-			Name:     "oidc_access",
+			Name:     authn.OIDCAccessCookieName,
 			Value:    tokens.AccessToken,
 			Path:     "/",
 			Secure:   true,
@@ -330,7 +331,7 @@ func (o *Verifier) IsRequest(r *http.Request) bool {
 		return true
 	}
 
-	cookie, err := r.Cookie("oidc_access")
+	cookie, err := r.Cookie(authn.OIDCAccessCookieName)
 	if err == nil && cookie != nil {
 		return true
 	}
