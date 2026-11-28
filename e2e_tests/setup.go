@@ -631,13 +631,41 @@ func setupLocalOperationsCenterConfig(ctx context.Context, t *testing.T, freshIn
 	}
 
 	if remoteAddr == "" {
-		mustRun(t, `../bin/operations-center.linux.%s remote add --accept-certificate e2e-test %s`, cpuArch, operationsCenterAddress)
+		addOperationsCenterRemote(ctx, t, operationsCenterAddress)
 	}
 
 	resp := mustRun(t, `../bin/operations-center.linux.%s remote list`, cpuArch)
 	fmt.Println(resp.Output())
 
 	mustRun(t, `../bin/operations-center.linux.%s remote switch e2e-test`, cpuArch)
+}
+
+// addOperationsCenterRemote retries only while the daemon is starting. The
+// open port does not mean the daemon is ready. It answers with 425 Too Early
+// until the security configuration is loaded.
+func addOperationsCenterRemote(ctx context.Context, t *testing.T, operationsCenterAddress string) {
+	t.Helper()
+
+	ctx, cancel := context.WithTimeout(ctx, strechedTimeout(time.Minute))
+	defer cancel()
+
+	for {
+		resp := runQuietWithContext(ctx, t, `../bin/operations-center.linux.%s remote add --accept-certificate e2e-test %s`, cpuArch, operationsCenterAddress)
+		if resp.Success() {
+			return
+		}
+
+		if !strings.Contains(resp.Output(), "Operations Center is still starting") {
+			t.Fatalf("Failed to add the Operations Center remote: %s", resp.Error())
+		}
+
+		select {
+		case <-ctx.Done():
+			t.Fatalf("Failed to add the Operations Center remote: %v: %s", ctx.Err(), resp.Error())
+
+		case <-time.After(1 * time.Second):
+		}
+	}
 }
 
 func updateSystemSettingsWithRegistrationScriptlet(t *testing.T, tmpDir string) {
